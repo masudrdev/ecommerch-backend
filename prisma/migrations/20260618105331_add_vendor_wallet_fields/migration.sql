@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Vendor" ADD COLUMN     "availableBalance" DOUBLE PRECISION NOT NULL DEFAULT 0,
+ADD COLUMN     "totalWithdrawn" DOUBLE PRECISION NOT NULL DEFAULT 0;
