@@ -1,6 +1,7 @@
 import express from "express";
 import {
   createReview,
+  getMyReviews,
   getProductReviews,
   updateReview,
   deleteReview,
@@ -10,7 +11,7 @@ import { protect, allowRoles } from "../middlewares/auth.middleware.js";
 const router = express.Router();
 
 router.post("/", protect, allowRoles("CUSTOMER"), createReview);
-
+router.get("/my-reviews", protect, allowRoles("CUSTOMER"), getMyReviews);
 router.get("/product/:productId", getProductReviews);
 
 router.patch("/:id", protect, allowRoles("CUSTOMER"), updateReview);

@@ -10,6 +10,7 @@ import {
   updatePassword,
   refreshToken,
   logout,
+  updateMyProfile,
 } from "../controllers/auth.controller.js";
 import { protect, allowRoles } from "../middlewares/auth.middleware.js";
 const router = express.Router();
@@ -37,6 +38,7 @@ router.post("/forgot-password", forgotPassword);
 router.post("/verify-reset-otp", verifyResetOtp);
 router.post("/reset-password", resetPassword);
 
+router.patch("/profile", protect, updateMyProfile);
 router.patch("/update-password", protect, updatePassword);
 router.post("/refresh-token", refreshToken);
 router.post("/logout", protect, logout);

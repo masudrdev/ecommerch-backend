@@ -8,6 +8,9 @@ import { createOrder,
   deleteOrderBySuperAdmin,
   createManualOrder,
   getVendorOrders,
+  updateVendorOrderStatus,
+  updateVendorOrderItemStatus,
+  getVendorOrderDetails,
 
 } from "../controllers/order.controller.js";
 import { protect, allowRoles } from "../middlewares/auth.middleware.js";
@@ -40,6 +43,25 @@ router.get(
   allowRoles("VENDOR"),
   getVendorOrders
 );
+router.get(
+  "/vendor/:orderId",
+  protect,
+  allowRoles("VENDOR"),
+  getVendorOrderDetails
+);
+router.patch(
+  "/vendor/items/:itemId/status",
+  protect,
+  allowRoles("VENDOR"),
+  updateVendorOrderItemStatus
+);
+router.patch(
+  "/vendor/:id/status",
+  protect,
+  allowRoles("VENDOR"),
+  updateVendorOrderStatus
+);
+
 router.get(
   "/:id",
   protect,

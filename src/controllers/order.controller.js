@@ -409,7 +409,50 @@ export const updateOrderStatus = async (req, res) => {
     });
     const isOrderStatusChanged = oldOrder.orderStatus !== order.orderStatus;
     const isPaymentStatusChanged = oldOrder.paymentStatus !== order.paymentStatus;
+    let notificationTitle = "Order Updated";
+    let notificationMessage = `Your order ${order.orderNumber} has been updated.`;
 
+    switch (order.orderStatus) {
+      case "CONFIRMED":
+        notificationTitle = "Order Confirmed";
+        notificationMessage = `Your order ${order.orderNumber} has been confirmed.`;
+        break;
+
+      case "PROCESSING":
+        notificationTitle = "Order Processing";
+        notificationMessage = `Your order ${order.orderNumber} is now processing.`;
+        break;
+
+      case "SHIPPED":
+        notificationTitle = "Order Shipped";
+        notificationMessage = `Your order ${order.orderNumber} has been shipped.`;
+        break;
+
+      case "DELIVERED":
+        notificationTitle = "Order Delivered";
+        notificationMessage = `Your order ${order.orderNumber} has been delivered.`;
+        break;
+
+      case "COMPLETED":
+        notificationTitle = "Order Completed";
+        notificationMessage = `Your order ${order.orderNumber} has been completed.`;
+        break;
+
+      case "RETURNED":
+        notificationTitle = "Order Returned";
+        notificationMessage = `Your order ${order.orderNumber} has been returned.`;
+        break;
+
+      case "REFUNDED":
+        notificationTitle = "Order Refunded";
+        notificationMessage = `Refund processed for order ${order.orderNumber}.`;
+        break;
+
+      case "CANCELLED":
+        notificationTitle = "Order Cancelled";
+        notificationMessage = `Your order ${order.orderNumber} has been cancelled.`;
+        break;
+    }
     if (isOrderStatusChanged || isPaymentStatusChanged) {
       let action = "ORDER_UPDATED";
 
@@ -420,11 +463,10 @@ export const updateOrderStatus = async (req, res) => {
       } else if (isPaymentStatusChanged) {
         action = "PAYMENT_STATUS_UPDATED";
       }
-
       await createNotification({
         userId: order.userId,
-        title: "Order Updated",
-        message: `Your order ${order.orderNumber} has been updated.`,
+        title: notificationTitle,
+        message: notificationMessage,
         type: action,
         link: `/customer/orders/${order.id}`,
       });
@@ -791,9 +833,7 @@ export const createManualOrder = async (req, res) => {
 export const getVendorOrders = async (req, res) => {
   try {
     const vendor = await prisma.vendor.findUnique({
-      where: {
-        userId: req.user.id,
-      },
+      where: { userId: req.user.id },
     });
 
     if (!vendor) {
@@ -803,50 +843,487 @@ export const getVendorOrders = async (req, res) => {
       });
     }
 
-    const orders = await prisma.order.findMany({
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const search = req.query.search?.trim() || "";
+    const status = req.query.status?.trim() || "ALL";
+
+    const itemWhere = {
+      vendorId: vendor.id,
+
+      ...(status !== "ALL"
+        ? {
+            itemStatus: status,
+          }
+        : {}),
+
+      ...(search
+        ? {
+            OR: [
+              {
+                order: {
+                  orderNumber: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                product: {
+                  name: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                id: {
+                  contains: search,
+                  mode: "insensitive",
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+
+    const allVendorItems = await prisma.orderItem.findMany({
+      where: itemWhere,
+      orderBy: {
+        order: {
+          createdAt: "desc",
+        },
+      },
+      select: {
+        id: true,
+        itemStatus: true,
+        quantity: true,
+        price: true,
+        size: true,
+        color: true,
+
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            createdAt: true,
+          },
+        },
+
+        product: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            images: {
+              where: { isMain: true },
+              select: { url: true },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    const groupedMap = new Map();
+
+    for (const item of allVendorItems) {
+      const orderId = item.order.id;
+
+      if (!groupedMap.has(orderId)) {
+        groupedMap.set(orderId, {
+          orderId,
+          orderNumber: item.order.orderNumber,
+          createdAt: item.order.createdAt,
+          items: [],
+          vendorTotal: 0,
+        });
+      }
+
+      const orderGroup = groupedMap.get(orderId);
+
+      orderGroup.items.push({
+        id: item.id,
+        itemStatus: item.itemStatus,
+        quantity: item.quantity,
+        price: item.price,
+        subtotal: item.price * item.quantity,
+        size: item.size,
+        color: item.color,
+        product: item.product,
+      });
+
+      orderGroup.vendorTotal += item.price * item.quantity;
+    }
+
+    const groupedOrders = Array.from(groupedMap.values());
+
+    const getVendorStatus = (items) => {
+      const statuses = items.map((item) => item.itemStatus);
+
+      if (statuses.every((s) => s === "SHIPPED")) return "SHIPPED";
+      if (statuses.includes("SHIPPED")) return "PARTIALLY_SHIPPED";
+
+      if (statuses.every((s) => s === "PROCESSING")) return "PROCESSING";
+      if (statuses.includes("PROCESSING")) return "PARTIALLY_PROCESSING";
+
+      if (statuses.every((s) => s === "CONFIRMED")) return "CONFIRMED";
+      if (statuses.includes("CONFIRMED")) return "PARTIALLY_CONFIRMED";
+
+      return "PENDING";
+    };
+
+    const formattedOrders = groupedOrders.map((order) => ({
+      orderId: order.orderId,
+      orderNumber: order.orderNumber,
+      createdAt: order.createdAt,
+      vendorStatus: getVendorStatus(order.items),
+      itemCount: order.items.length,
+      vendorTotal: order.vendorTotal,
+      image: order.items[0]?.product?.images?.[0]?.url || null,
+      products: order.items.map((item) => ({
+        itemId: item.id,
+        productId: item.product?.id,
+        name: item.product?.name,
+        image: item.product?.images?.[0]?.url || null,
+        quantity: item.quantity,
+        itemStatus: item.itemStatus,
+      })),
+      items: order.items,
+    }));
+
+    const totalOrders = formattedOrders.length;
+    const paginatedOrders = formattedOrders.slice(skip, skip + limit);
+
+    return res.json({
+      success: true,
+      totalOrders,
+      totalItems: allVendorItems.length,
+      currentPage: page,
+      limit,
+      totalPages: Math.ceil(totalOrders / limit),
+      orders: paginatedOrders,
+    });
+  } catch (error) {
+    console.error("Get vendor orders error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+export const updateVendorOrderStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { orderStatus } = req.body;
+
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId: req.user.id },
+    });
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    const order = await prisma.order.findFirst({
       where: {
+        id,
+        items: {
+          some: { vendorId: vendor.id },
+        },
+      },
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found for this vendor",
+      });
+    }
+
+    const nextStatusMap = {
+      PENDING: "CONFIRMED",
+      CONFIRMED: "PROCESSING",
+      PROCESSING: "SHIPPED",
+    };
+
+    const allowedNextStatus = nextStatusMap[order.orderStatus];
+
+    if (!allowedNextStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "This order status is locked for vendor",
+      });
+    }
+
+    if (orderStatus !== allowedNextStatus) {
+      return res.status(400).json({
+        success: false,
+        message: `Vendor can only update ${order.orderStatus} to ${allowedNextStatus}`,
+      });
+    }
+
+    const updatedOrder = await prisma.order.update({
+      where: { id },
+      data: { orderStatus },
+      select: {
+        id: true,
+        orderNumber: true,
+        orderStatus: true,
+        createdAt: true,
+      },
+    });
+
+    await createActivityLog({
+      userId: req.user.id,
+      action: "VENDOR_ORDER_STATUS_UPDATED",
+      entityType: "ORDER",
+      entityId: updatedOrder.id,
+      oldData: { orderStatus: order.orderStatus },
+      newData: { orderStatus: updatedOrder.orderStatus },
+      req,
+    });
+
+    return res.json({
+      success: true,
+      message: "Vendor order status updated successfully",
+      order: updatedOrder,
+    });
+  } catch (error) {
+    console.error("Vendor order status update error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+const syncMainOrderStatusFromItems = async (orderId) => {
+  const items = await prisma.orderItem.findMany({
+    where: { orderId },
+    select: { itemStatus: true },
+  });
+
+  if (!items.length) return;
+
+  const statuses = items.map((item) => item.itemStatus);
+
+  let newOrderStatus = "PENDING";
+
+  if (statuses.every((status) => status === "SHIPPED")) {
+    newOrderStatus = "SHIPPED";
+  } else if (statuses.includes("SHIPPED")) {
+    newOrderStatus = "PARTIALLY_SHIPPED";
+  } else if (statuses.every((status) => status === "PROCESSING")) {
+    newOrderStatus = "PROCESSING";
+  } else if (statuses.includes("PROCESSING")) {
+    newOrderStatus = "PARTIALLY_PROCESSING";
+  } else if (statuses.every((status) => status === "CONFIRMED")) {
+    newOrderStatus = "CONFIRMED";
+  } else if (statuses.includes("CONFIRMED")) {
+    newOrderStatus = "PARTIALLY_CONFIRMED";
+  }
+
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { orderStatus: newOrderStatus },
+  });
+};
+export const updateVendorOrderItemStatus = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { itemStatus } = req.body;
+
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId: req.user.id },
+    });
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    const item = await prisma.orderItem.findFirst({
+      where: {
+        id: itemId,
+        vendorId: vendor.id,
+      },
+    });
+
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        message: "Order item not found",
+      });
+    }
+
+    const nextStatusMap = {
+      PENDING: "CONFIRMED",
+      CONFIRMED: "PROCESSING",
+      PROCESSING: "SHIPPED",
+    };
+
+    const nextStatus = nextStatusMap[item.itemStatus];
+
+    if (!nextStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "Item status is locked",
+      });
+    }
+
+    if (itemStatus !== nextStatus) {
+      return res.status(400).json({
+        success: false,
+        message: `You can only update ${item.itemStatus} to ${nextStatus}`,
+      });
+    }
+
+    const updatedItem = await prisma.orderItem.update({
+      where: { id: item.id },
+      data: { itemStatus },
+    });
+
+    await syncMainOrderStatusFromItems(item.orderId);
+
+    await createActivityLog({
+      userId: req.user.id,
+      action: "VENDOR_ORDER_ITEM_STATUS_UPDATED",
+      entityType: "ORDER_ITEM",
+      entityId: updatedItem.id,
+      oldData: { itemStatus: item.itemStatus },
+      newData: { itemStatus },
+      req,
+    });
+
+    return res.json({
+      success: true,
+      message: "Order item status updated successfully",
+      item: updatedItem,
+    });
+  } catch (error) {
+    console.error("Vendor order item status update error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+const getVendorStatusFromItems = (items) => {
+  const statuses = items.map((item) => item.itemStatus);
+
+  if (statuses.every((s) => s === "SHIPPED")) return "SHIPPED";
+  if (statuses.includes("SHIPPED")) return "PARTIALLY_SHIPPED";
+
+  if (statuses.every((s) => s === "PROCESSING")) return "PROCESSING";
+  if (statuses.includes("PROCESSING")) return "PARTIALLY_PROCESSING";
+
+  if (statuses.every((s) => s === "CONFIRMED")) return "CONFIRMED";
+  if (statuses.includes("CONFIRMED")) return "PARTIALLY_CONFIRMED";
+
+  return "PENDING";
+};
+export const getVendorOrderDetails = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId: req.user.id },
+    });
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    const order = await prisma.order.findFirst({
+      where: {
+        id: orderId,
         items: {
           some: {
             vendorId: vendor.id,
           },
         },
       },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
-          },
-        },
+      select: {
+        id: true,
+        orderNumber: true,
+        createdAt: true,
+        paymentMethod: true,
+        paymentStatus: true,
+
         items: {
           where: {
             vendorId: vendor.id,
           },
-          include: {
+          select: {
+            id: true,
+            itemStatus: true,
+            quantity: true,
+            price: true,
+            size: true,
+            color: true,
+            stockReduced: true,
+
             product: {
               select: {
                 id: true,
                 name: true,
                 slug: true,
+                images: {
+                  where: { isMain: true },
+                  select: { url: true },
+                  take: 1,
+                },
               },
             },
           },
         },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
     });
 
-    res.json({
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found for this vendor",
+      });
+    }
+
+    const items = order.items.map((item) => ({
+      ...item,
+      subtotal: item.price * item.quantity,
+    }));
+
+    const vendorTotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+
+    return res.json({
       success: true,
-      total: orders.length,
-      orders,
+      order: {
+        id: order.id,
+        orderNumber: order.orderNumber,
+        createdAt: order.createdAt,
+        paymentMethod: order.paymentMethod,
+        paymentStatus: order.paymentStatus,
+        vendorStatus: getVendorStatusFromItems(items),
+        vendorTotal,
+        items,
+      },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get vendor order details error:", error);
+
+    return res.status(500).json({
       success: false,
       message: error.message,
     });

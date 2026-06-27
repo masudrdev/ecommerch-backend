@@ -15,6 +15,9 @@ import activityLogRoutes from "./routes/activityLog.routes.js";
 import payoutRoutes from "./routes/payout.routes.js";
 import reviewRoutes from "./routes/review.routes.js";
 import supportRoutes from "./routes/support.routes.js";
+import dashboardRoutes from "./routes/dashboard.routes.js";
+import addressRoutes from "./routes/address.routes.js";
+
 
 
 dotenv.config();
@@ -41,13 +44,16 @@ app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);
 
 app.use("/api/products", productRoutes);
+
 app.use("/api/vendors", vendorRoutes);
 
 app.use("/api/admin", adminRoutes);
 
+app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/wishlist", wishlistRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/addresses", addressRoutes);
 
 app.use("/api/reviews", reviewRoutes);
 

@@ -37,14 +37,28 @@ enum ProductStatus {
 
 enum OrderStatus {
   PENDING
+
+  PARTIALLY_CONFIRMED
   CONFIRMED
+
+  PARTIALLY_PROCESSING
   PROCESSING
+
+  PARTIALLY_SHIPPED
   SHIPPED
+
   DELIVERED
   COMPLETED
+
   CANCELLED
   RETURNED
   REFUNDED
+}
+enum OrderItemStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
 }
 
 enum PaymentMethod {
@@ -62,6 +76,11 @@ enum TicketStatus {
   RESOLVED
   CLOSED
 }
+enum AddressType {
+  HOME
+  OFFICE
+  OTHER
+}
 
 model User {
   id       String     @id @default(uuid())
@@ -69,6 +88,7 @@ model User {
   username String     @unique
   email    String     @unique
   phone    String?
+  addresses UserAddress[]
   password String
   role     Role       @default(CUSTOMER)
   status   UserStatus @default(ACTIVE)
@@ -95,6 +115,27 @@ model User {
   activityLogs    ActivityLog[]
   supportTickets  SupportTicket[]
   supportMessages SupportMessage[]
+}
+
+model UserAddress {
+  id        String   @id @default(uuid())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      AddressType @default(HOME)
+
+  fullName  String
+  phone     String
+  address   String
+  district  String
+  upazila   String
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 model SupportTicket {
@@ -182,6 +223,8 @@ model Product {
   salePrice   Float?
   stock       Int           @default(0)
   status      ProductStatus @default(PENDING)
+  deliveryCharge Float @default(0)
+outsideDistrictExtraCharge Float @default(35)
 
   vendorId String
   vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
@@ -189,8 +232,8 @@ model Product {
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  categoryId String
-  category   Category @relation(fields: [categoryId], references: [id])
+ categoryId String?
+category   Category? @relation(fields: [categoryId], references: [id])
 
   brandId String?
   brand   Brand?  @relation(fields: [brandId], references: [id])
@@ -211,6 +254,8 @@ model ProductImage {
   productId String
   url       String
   publicId  String?
+  isMain    Boolean @default(false)
+
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
@@ -277,19 +322,25 @@ model Order {
 }
 
 model OrderItem {
-  id        String @id @default(uuid())
+  id        String   @id @default(uuid())
   orderId   String
   productId String
   vendorId  String
 
-  quantity Int
-  price    Float
-  size     String?
-  color    String?
+  quantity  Int
+  price     Float
+  size      String?
+  color     String?
 
-  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  itemStatus   OrderItemStatus @default(PENDING)
+  stockReduced Boolean         @default(false)
+
+  order   Order   @relation(fields: [orderId], references: [id])
   product Product @relation(fields: [productId], references: [id])
   vendor  Vendor  @relation(fields: [vendorId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 model Wishlist {

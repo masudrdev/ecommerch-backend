@@ -1,54 +1,57 @@
 import prisma from "../lib/prisma.js";
+import { createNotification } from "../services/notification.service.js";
 import { productSchema } from "../validations/product.validation.js";
 import uploadToCloudinary from "../utils/uploadToCloudinary.js";
+import deleteFromCloudinary from "../utils/deleteFromCloudinary.js";
 
-export const createProduct = async (req, res) => {
-  try {
-    const data = productSchema.parse(req.body);
 
-    const vendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
-    });
+// export const createProduct = async (req, res) => {
+//   try {
+//     const data = productSchema.parse(req.body);
 
-    if (!vendor || vendor.status !== "APPROVED") {
-      return res.status(403).json({
-        success: false,
-        message: "Vendor is not approved",
-      });
-    }
+//     const vendor = await prisma.vendor.findUnique({
+//       where: { userId: req.user.id },
+//     });
 
-    const exists = await prisma.product.findUnique({
-      where: { slug: data.slug },
-    });
+//     if (!vendor || vendor.status !== "APPROVED") {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Vendor is not approved",
+//       });
+//     }
 
-    if (exists) {
-      return res.status(400).json({
-        success: false,
-        message: "Product slug already exists",
-      });
-    }
+//     const exists = await prisma.product.findUnique({
+//       where: { slug: data.slug },
+//     });
 
-    const product = await prisma.product.create({
-      data: {
-        ...data,
-        vendorId: vendor.id,
-        userId: req.user.id,
-        status: "PENDING",
-      },
-    });
+//     if (exists) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Product slug already exists",
+//       });
+//     }
 
-    res.status(201).json({
-      success: true,
-      message: "Product created successfully. Waiting for admin approval.",
-      product,
-    });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
+//     const product = await prisma.product.create({
+//       data: {
+//         ...data,
+//         vendorId: vendor.id,
+//         userId: req.user.id,
+//         status: "PENDING",
+//       },
+//     });
+
+//     res.status(201).json({
+//       success: true,
+//       message: "Product created successfully. Waiting for admin approval.",
+//       product,
+//     });
+//   } catch (error) {
+//     res.status(400).json({
+//       success: false,
+//       message: error.message,
+//     });
+//   }
+// };
 
 // export const getProducts = async (req, res) => {
 //   try {
@@ -81,6 +84,68 @@ export const createProduct = async (req, res) => {
 //     });
 //   }
 // };
+const slugify = (text) =>
+  text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-");
+
+export const createProduct = async (req, res) => {
+  try {
+    const data = productSchema.parse(req.body);
+
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId: req.user.id },
+    });
+
+    if (!vendor || vendor.status !== "APPROVED") {
+      return res.status(403).json({
+        success: false,
+        message: "Vendor is not approved",
+      });
+    }
+
+    const baseSlug = data.slug || slugify(data.name);
+    let finalSlug = baseSlug;
+    let counter = 1;
+
+    while (await prisma.product.findUnique({ where: { slug: finalSlug } })) {
+      finalSlug = `${baseSlug}-${counter}`;
+      counter++;
+    }
+
+    const product = await prisma.product.create({
+      data: {
+        name: data.name,
+        slug: finalSlug,
+        description: data.description,
+        price: data.price,
+        salePrice: data.salePrice,
+        stock: data.stock,
+        deliveryCharge: data.deliveryCharge,
+        outsideDistrictExtraCharge: data.outsideDistrictExtraCharge,
+        categoryId: data.categoryId || null,
+        brandId: data.brandId || null,
+        vendorId: vendor.id,
+        userId: req.user.id,
+        status: "PENDING",
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Product created successfully. Waiting for admin approval.",
+      product,
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 export const getProducts = async (req, res) => {
   try {
     const {
@@ -287,6 +352,7 @@ await createNotification({
 export const uploadProductImages = async (req, res) => {
   try {
     const { id } = req.params;
+    const { isMain = "false" } = req.body;
 
     const product = await prisma.product.findUnique({
       where: { id },
@@ -314,6 +380,15 @@ export const uploadProductImages = async (req, res) => {
       });
     }
 
+    const mainImage = isMain === "true";
+
+    if (mainImage) {
+      await prisma.productImage.updateMany({
+        where: { productId: product.id },
+        data: { isMain: false },
+      });
+    }
+
     const uploadedImages = [];
 
     for (const file of req.files) {
@@ -324,6 +399,7 @@ export const uploadProductImages = async (req, res) => {
           productId: product.id,
           url: result.secure_url,
           publicId: result.public_id,
+          isMain: mainImage,
         },
       });
 
@@ -380,6 +456,46 @@ export const addProductVariants = async (req, res) => {
     res.status(400).json({ success: false, message: error.message });
   }
 };
+// export const updateProduct = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+
+//     const product = await prisma.product.findUnique({
+//       where: { id },
+//       include: { vendor: true },
+//     });
+
+//     if (!product) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Product not found",
+//       });
+//     }
+
+//     if (product.vendor.userId !== req.user.id) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Not your product",
+//       });
+//     }
+
+//     const updatedProduct = await prisma.product.update({
+//       where: { id },
+//       data: req.body,
+//     });
+
+//     res.json({
+//       success: true,
+//       message: "Product updated successfully",
+//       product: updatedProduct,
+//     });
+//   } catch (error) {
+//     res.status(400).json({
+//       success: false,
+//       message: error.message,
+//     });
+//   }
+// };
 export const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
@@ -396,22 +512,49 @@ export const updateProduct = async (req, res) => {
       });
     }
 
-    if (product.vendor.userId !== req.user.id) {
+    const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+
+    if (!isAdmin && product.vendor.userId !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: "Not your product",
       });
     }
 
-    const updatedProduct = await prisma.product.update({
+    const data = {
+      name: req.body.name,
+      description: req.body.description,
+      price: Number(req.body.price),
+      salePrice:
+        req.body.salePrice === null ||
+        req.body.salePrice === ""
+          ? null
+          : Number(req.body.salePrice),
+
+      deliveryCharge: Number(req.body.deliveryCharge || 0),
+      outsideDistrictExtraCharge: Number(
+        req.body.outsideDistrictExtraCharge || 35
+      ),
+
+      stock: Number(req.body.stock || 0),
+
+      categoryId: req.body.categoryId || null,
+      brandId: req.body.brandId || null,
+    };
+
+    if (!isAdmin) {
+      data.status = "PENDING";
+    }
+
+    const updated = await prisma.product.update({
       where: { id },
-      data: req.body,
+      data,
     });
 
     res.json({
       success: true,
-      message: "Product updated successfully",
-      product: updatedProduct,
+      message: "Product updated successfully.",
+      product: updated,
     });
   } catch (error) {
     res.status(400).json({
@@ -420,6 +563,43 @@ export const updateProduct = async (req, res) => {
     });
   }
 };
+export const getMyVendorProducts = async (req, res) => {
+  try {
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId: req.user.id },
+    });
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    const products = await prisma.product.findMany({
+      where: { vendorId: vendor.id },
+      include: {
+        category: true,
+        brand: true,
+        images: true,
+        variants: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({
+      success: true,
+      products,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
 export const deleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
@@ -450,6 +630,159 @@ export const deleteProduct = async (req, res) => {
     res.json({
       success: true,
       message: "Product deleted successfully",
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+export const getProductForManage = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const product = await prisma.product.findUnique({
+      where: { id },
+      include: {
+        category: true,
+        brand: true,
+        vendor: true,
+        images: true,
+        variants: true,
+      },
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    const isOwner = product.vendor.userId === req.user.id;
+    const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to manage this product",
+      });
+    }
+
+    res.json({
+      success: true,
+      product,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+export const replaceProductVariants = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { variants = [] } = req.body;
+
+    const product = await prisma.product.findUnique({
+      where: { id },
+      include: { vendor: true },
+    });
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    if (product.vendor.userId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Not your product",
+      });
+    }
+
+    await prisma.productVariant.deleteMany({
+      where: { productId: id },
+    });
+
+    if (variants.length > 0) {
+      await prisma.productVariant.createMany({
+        data: variants.map((item) => ({
+          productId: id,
+          color: item.color || null,
+          size: item.size || null,
+          stock: Number(item.stock || 0),
+          price: item.price ? Number(item.price) : null,
+          sku: item.sku || null,
+        })),
+      });
+    }
+
+    const totalStock = variants.reduce(
+      (sum, item) => sum + Number(item.stock || 0),
+      0
+    );
+
+    await prisma.product.update({
+      where: { id },
+      data: { stock: totalStock },
+    });
+
+    res.json({
+      success: true,
+      message: "Product variants updated successfully",
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+export const deleteProductImage = async (req, res) => {
+  try {
+    const { imageId } = req.params;
+
+    const image = await prisma.productImage.findUnique({
+      where: { id: imageId },
+      include: {
+        product: {
+          include: { vendor: true },
+        },
+      },
+    });
+
+    if (!image) {
+      return res.status(404).json({
+        success: false,
+        message: "Image not found",
+      });
+    }
+
+    const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+
+    if (!isAdmin && image.product.vendor.userId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Not your product image",
+      });
+    }
+
+    if (image.publicId) {
+      await deleteFromCloudinary(image.publicId);
+    }
+
+    await prisma.productImage.delete({
+      where: { id: imageId },
+    });
+
+    res.json({
+      success: true,
+      message: "Image deleted successfully",
     });
   } catch (error) {
     res.status(400).json({

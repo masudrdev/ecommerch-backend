@@ -217,7 +217,7 @@ export const login = async (req, res) => {
         role: user.role,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "60m" }
     );
 
     const refreshToken = jwt.sign(
@@ -469,6 +469,41 @@ export const logout = async (req, res) => {
     res.json({
       success: true,
       message: "Logout successful",
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+export const updateMyProfile = async (req, res) => {
+  try {
+    const { name, phone, avatar } = req.body;
+
+    const user = await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        name,
+        phone,
+        avatar,
+      },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        phone: true,
+        avatar: true,
+        role: true,
+        status: true,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Profile updated successfully",
+      user,
     });
   } catch (error) {
     res.status(400).json({
