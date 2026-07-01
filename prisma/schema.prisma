@@ -54,11 +54,13 @@ enum OrderStatus {
   RETURNED
   REFUNDED
 }
+
 enum OrderItemStatus {
   PENDING
   CONFIRMED
   PROCESSING
   SHIPPED
+  CANCELLED
 }
 
 enum PaymentMethod {
@@ -76,6 +78,7 @@ enum TicketStatus {
   RESOLVED
   CLOSED
 }
+
 enum AddressType {
   HOME
   OFFICE
@@ -83,15 +86,15 @@ enum AddressType {
 }
 
 model User {
-  id       String     @id @default(uuid())
-  name     String
-  username String     @unique
-  email    String     @unique
-  phone    String?
+  id        String        @id @default(uuid())
+  name      String
+  username  String        @unique
+  email     String        @unique
+  phone     String?
   addresses UserAddress[]
-  password String
-  role     Role       @default(CUSTOMER)
-  status   UserStatus @default(ACTIVE)
+  password  String
+  role      Role          @default(CUSTOMER)
+  status    UserStatus    @default(ACTIVE)
 
   isEmailVerified          Boolean   @default(false)
   emailVerificationCode    String?
@@ -112,18 +115,38 @@ model User {
   wishlists       Wishlist[]
   reviews         Review[]
   notifications   Notification[]
+  orderTimelines  OrderTimeline[]
   activityLogs    ActivityLog[]
   supportTickets  SupportTicket[]
   supportMessages SupportMessage[]
+  orderNotes      OrderNote[]
+}
+
+model OrderTimeline {
+  id String @id @default(uuid())
+
+  orderId String
+  itemId  String?
+  userId  String
+
+  title   String
+  details String?
+  type    String  @default("INFO")
+
+  order Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  item  OrderItem? @relation(fields: [itemId], references: [id])
+  user  User       @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
 }
 
 model UserAddress {
-  id        String   @id @default(uuid())
+  id String @id @default(uuid())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  type      AddressType @default(HOME)
+  type AddressType @default(HOME)
 
   fullName  String
   phone     String
@@ -178,10 +201,11 @@ model Vendor {
   availableBalance Float @default(0)
   totalWithdrawn   Float @default(0)
 
-  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  products Product[]
-  orders   OrderItem[]
-  payouts  PayoutRequest[]
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products   Product[]
+  orders     OrderItem[]
+  payouts    PayoutRequest[]
+  orderNotes OrderNote[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -215,16 +239,16 @@ model Brand {
 }
 
 model Product {
-  id          String        @id @default(uuid())
-  name        String
-  slug        String        @unique
-  description String?
-  price       Float
-  salePrice   Float?
-  stock       Int           @default(0)
-  status      ProductStatus @default(PENDING)
-  deliveryCharge Float @default(0)
-outsideDistrictExtraCharge Float @default(35)
+  id                         String        @id @default(uuid())
+  name                       String
+  slug                       String        @unique
+  description                String?
+  price                      Float
+  salePrice                  Float?
+  stock                      Int           @default(0)
+  status                     ProductStatus @default(PENDING)
+  deliveryCharge             Float         @default(0)
+  outsideDistrictExtraCharge Float         @default(35)
 
   vendorId String
   vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
@@ -232,8 +256,8 @@ outsideDistrictExtraCharge Float @default(35)
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
- categoryId String?
-category   Category? @relation(fields: [categoryId], references: [id])
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
 
   brandId String?
   brand   Brand?  @relation(fields: [brandId], references: [id])
@@ -256,7 +280,7 @@ model ProductImage {
   publicId  String?
   isMain    Boolean @default(false)
 
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 model ProductVariant {
@@ -315,32 +339,52 @@ model Order {
   district     String?
   upazila      String?
 
-  items OrderItem[]
+  items     OrderItem[]
+  notes     OrderNote[]
+  timelines OrderTimeline[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model OrderItem {
-  id        String   @id @default(uuid())
+  id        String @id @default(uuid())
   orderId   String
   productId String
   vendorId  String
 
-  quantity  Int
-  price     Float
-  size      String?
-  color     String?
+  quantity Int
+  price    Float
+  size     String?
+  color    String?
 
   itemStatus   OrderItemStatus @default(PENDING)
   stockReduced Boolean         @default(false)
 
-  order   Order   @relation(fields: [orderId], references: [id])
-  product Product @relation(fields: [productId], references: [id])
-  vendor  Vendor  @relation(fields: [vendorId], references: [id])
+  order     Order           @relation(fields: [orderId], references: [id])
+  product   Product         @relation(fields: [productId], references: [id])
+  vendor    Vendor          @relation(fields: [vendorId], references: [id])
+  timelines OrderTimeline[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
+}
+
+model OrderNote {
+  id                String  @id @default(uuid())
+  orderId           String
+  userId            String
+  vendorId          String?
+  note              String
+  noteType          String  @default("VENDOR_INTERNAL")
+  visibleToCustomer Boolean @default(false)
+
+  order  Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [userId], references: [id])
+  vendor Vendor? @relation(fields: [vendorId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Wishlist {

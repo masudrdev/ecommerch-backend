@@ -11,6 +11,7 @@ import { createOrder,
   updateVendorOrderStatus,
   updateVendorOrderItemStatus,
   getVendorOrderDetails,
+  addVendorOrderNote,
 
 } from "../controllers/order.controller.js";
 import { protect, allowRoles } from "../middlewares/auth.middleware.js";
@@ -42,6 +43,12 @@ router.get(
   protect,
   allowRoles("VENDOR"),
   getVendorOrders
+);
+router.post(
+  "/vendor/orders/:orderId/notes",
+  protect,
+  allowRoles("VENDOR"),
+  addVendorOrderNote
 );
 router.get(
   "/vendor/:orderId",
