@@ -406,6 +406,8 @@ model Review {
   productId String
   rating    Int
   comment   String?
+  vendorReply String?
+  vendorRepliedAt DateTime?
 
   user    User    @relation(fields: [userId], references: [id])
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)

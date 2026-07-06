@@ -791,3 +791,117 @@ export const deleteProductImage = async (req, res) => {
     });
   }
 };
+
+export const getAdminProducts = async (req, res) => {
+  try {
+    const {
+      search = "",
+      categoryId = "",
+      vendorId = "",
+      status = "ALL",
+      sort = "newest",
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const where = {
+      ...(search
+        ? { name: { contains: search, mode: "insensitive" } }
+        : {}),
+      ...(categoryId ? { categoryId } : {}),
+      ...(vendorId ? { vendorId } : {}),
+      ...(status !== "ALL" ? { status } : {}),
+    };
+
+    let orderBy = { createdAt: "desc" };
+
+    if (sort === "oldest") orderBy = { createdAt: "asc" };
+    if (sort === "price_low") orderBy = { salePrice: "asc" };
+    if (sort === "price_high") orderBy = { salePrice: "desc" };
+    if (sort === "stock_low") orderBy = { stock: "asc" };
+    if (sort === "stock_high") orderBy = { stock: "desc" };
+
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        include: {
+          category: true,
+          brand: true,
+          vendor: {
+            select: {
+              id: true,
+              shopName: true,
+              shopSlug: true,
+            },
+          },
+          images: true,
+          variants: true,
+        },
+        orderBy,
+        skip,
+        take: Number(limit),
+      }),
+
+      prisma.product.count({ where }),
+    ]);
+
+    res.json({
+      success: true,
+      products,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / Number(limit)),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+// export const getAdminProducts = async (req, res) => {
+//   try {
+//     const { search = "", categoryId = "", vendorId = "" } = req.query;
+
+//     const where = {
+//       ...(search
+//         ? { name: { contains: search, mode: "insensitive" } }
+//         : {}),
+//       ...(categoryId ? { categoryId } : {}),
+//       ...(vendorId ? { vendorId } : {}),
+//     };
+
+//     const products = await prisma.product.findMany({
+//       where,
+//       include: {
+//         category: true,
+//         brand: true,
+//         vendor: {
+//           select: {
+//             id: true,
+//             shopName: true,
+//             shopSlug: true,
+//           },
+//         },
+//         images: true,
+//         variants: true,
+//       },
+//       orderBy: { createdAt: "desc" },
+//     });
+
+//     res.json({
+//       success: true,
+//       products,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       success: false,
+//       message: error.message,
+//     });
+//   }
+// };

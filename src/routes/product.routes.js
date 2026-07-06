@@ -2,6 +2,7 @@ import express from "express";
 import {
   createProduct,
   getProducts,
+  getAdminProducts,
   getProductBySlug,
   updateProductStatus,
   uploadProductImages,
@@ -24,6 +25,12 @@ const router = express.Router();
 router.post("/", protect, allowRoles("VENDOR"), createProduct);
 
 router.get("/", getProducts);
+router.get(
+  "/admin/all",
+  protect,
+  allowRoles("ADMIN", "SUPER_ADMIN"),
+  getAdminProducts
+);
 router.get("/vendor/my-products", protect, allowRoles("VENDOR"), getMyVendorProducts);
 router.get(
   "/manage/:id",
