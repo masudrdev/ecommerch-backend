@@ -36,7 +36,7 @@ export const register = async (req, res) => {
         username: data.username,
         email: data.email,
         password: hashedPassword,
-        role: data.role || "CUSTOMER",
+        role: "CUSTOMER",
         isEmailVerified: false,
         emailVerificationCode: code,
         emailVerificationExpires: new Date(Date.now() + 10 * 60 * 1000),

@@ -1,262 +1,39 @@
-// import prisma from "../lib/prisma.js";
-
-// export const createReview = async (req, res) => {
-//   try {
-//     const { productId, rating, comment } = req.body;
-
-//     if (!productId || !rating) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Product ID and rating are required",
-//       });
-//     }
-
-//     if (rating < 1 || rating > 5) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Rating must be between 1 and 5",
-//       });
-//     }
-
-//     const product = await prisma.product.findUnique({
-//       where: { id: productId },
-//     });
-
-//     if (!product || product.status !== "APPROVED") {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Product not found",
-//       });
-//     }
-
-//     const purchased = await prisma.orderItem.findFirst({
-//       where: {
-//         productId,
-//         order: {
-//           userId: req.user.id,
-//           orderStatus: {
-//             in: ["DELIVERED", "COMPLETED"],
-//           },
-//         },
-//       },
-//     });
-
-//     if (!purchased) {
-//       return res.status(403).json({
-//         success: false,
-//         message: "You can review only purchased products",
-//       });
-//     }
-
-//     const alreadyReviewed = await prisma.review.findFirst({
-//       where: {
-//         userId: req.user.id,
-//         productId,
-//       },
-//     });
-
-//     if (alreadyReviewed) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "You already reviewed this product",
-//       });
-//     }
-
-//     const review = await prisma.review.create({
-//       data: {
-//         userId: req.user.id,
-//         productId,
-//         rating,
-//         comment,
-//       },
-//     });
-
-//     res.status(201).json({
-//       success: true,
-//       message: "Review submitted successfully",
-//       review,
-//     });
-//   } catch (error) {
-//     res.status(400).json({
-//       success: false,
-//       message: error.message,
-//     });
-//   }
-// };
-
-// export const getProductReviews = async (req, res) => {
-//   try {
-//     const { productId } = req.params;
-
-//     const reviews = await prisma.review.findMany({
-//       where: { productId },
-//       include: {
-//         user: {
-//           select: {
-//             id: true,
-//             name: true,
-//             username: true,
-//             avatar: true,
-//           },
-//         },
-//       },
-//       orderBy: { createdAt: "desc" },
-//     });
-
-//     const average = await prisma.review.aggregate({
-//       where: { productId },
-//       _avg: { rating: true },
-//       _count: { rating: true },
-//     });
-
-//     res.json({
-//       success: true,
-//       averageRating: average._avg.rating || 0,
-//       totalReviews: average._count.rating || 0,
-//       reviews,
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: error.message,
-//     });
-//   }
-// };
-// export const getMyReviews = async (req, res) => {
-//   try {
-//     const reviews = await prisma.review.findMany({
-//       where: {
-//         userId: req.user.id,
-//       },
-//       include: {
-//         product: {
-//           select: {
-//             id: true,
-//             name: true,
-//             slug: true,
-//             //mainImage: true,
-//           },
-//         },
-//       },
-//       orderBy: {
-//         createdAt: "desc",
-//       },
-//     });
-
-//     res.json({
-//       success: true,
-//       reviews,
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: error.message,
-//     });
-//   }
-// };
-
-// export const updateReview = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const { rating, comment } = req.body;
-
-//     const review = await prisma.review.findUnique({
-//       where: { id },
-//     });
-
-//     if (!review || review.userId !== req.user.id) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Review not found",
-//       });
-//     }
-
-//     if (rating && (rating < 1 || rating > 5)) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Rating must be between 1 and 5",
-//       });
-//     }
-
-//     const updated = await prisma.review.update({
-//       where: { id },
-//       data: {
-//         rating: rating || review.rating,
-//         comment,
-//       },
-//     });
-
-//     res.json({
-//       success: true,
-//       message: "Review updated successfully",
-//       review: updated,
-//     });
-//   } catch (error) {
-//     res.status(400).json({
-//       success: false,
-//       message: error.message,
-//     });
-//   }
-// };
-
-// export const deleteReview = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-
-//     const review = await prisma.review.findUnique({
-//       where: { id },
-//     });
-
-//     if (!review) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Review not found",
-//       });
-//     }
-
-//     const isOwner = review.userId === req.user.id;
-//     const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
-
-//     if (!isOwner && !isAdmin) {
-//       return res.status(403).json({
-//         success: false,
-//         message: "Access denied",
-//       });
-//     }
-
-//     await prisma.review.delete({
-//       where: { id },
-//     });
-
-//     res.json({
-//       success: true,
-//       message: "Review deleted successfully",
-//     });
-//   } catch (error) {
-//     res.status(400).json({
-//       success: false,
-//       message: error.message,
-//     });
-//   }
-// };
-
 import prisma from "../lib/prisma.js";
+
+const isAdminRole = (role) => {
+  return ["ADMIN", "SUPER_ADMIN"].includes(role);
+};
+
+const normalizeRating = (rating) => {
+  const value = Number(rating);
+  if (!Number.isInteger(value) || value < 1 || value > 5) {
+    return null;
+  }
+  return value;
+};
+
+const getReviewerName = (review) => {
+  return (
+    review.user?.name ||
+    review.user?.username ||
+    review.reviewerName ||
+    "Customer"
+  );
+};
+
+const getReviewerAvatar = (review) => {
+  return review.user?.avatar || review.reviewerAvatar || null;
+};
 
 export const createReview = async (req, res) => {
   try {
     const { productId, rating, comment } = req.body;
+    const finalRating = normalizeRating(rating);
 
-    if (!productId || !rating) {
+    if (!productId || !finalRating) {
       return res.status(400).json({
         success: false,
-        message: "Product ID and rating are required",
-      });
-    }
-
-    if (rating < 1 || rating > 5) {
-      return res.status(400).json({
-        success: false,
-        message: "Rating must be between 1 and 5",
+        message: "Product ID and valid rating are required",
       });
     }
 
@@ -276,7 +53,9 @@ export const createReview = async (req, res) => {
         productId,
         order: {
           userId: req.user.id,
-          orderStatus: { in: ["DELIVERED", "COMPLETED"] },
+          orderStatus: {
+            in: ["DELIVERED", "COMPLETED"],
+          },
         },
       },
     });
@@ -289,7 +68,10 @@ export const createReview = async (req, res) => {
     }
 
     const alreadyReviewed = await prisma.review.findFirst({
-      where: { userId: req.user.id, productId },
+      where: {
+        userId: req.user.id,
+        productId,
+      },
     });
 
     if (alreadyReviewed) {
@@ -300,7 +82,31 @@ export const createReview = async (req, res) => {
     }
 
     const review = await prisma.review.create({
-      data: { userId: req.user.id, productId, rating, comment },
+      data: {
+        userId: req.user.id,
+        productId,
+        rating: finalRating,
+        comment: comment || "",
+        source: "USER",
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatar: true,
+          },
+        },
+        product: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            images: true,
+          },
+        },
+      },
     });
 
     res.status(201).json({
@@ -309,7 +115,265 @@ export const createReview = async (req, res) => {
       review,
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const createAdminCustomReview = async (req, res) => {
+  try {
+    const { productId, reviewerName, reviewerAvatar, rating, comment } = req.body;
+    const finalRating = normalizeRating(rating);
+
+    if (!productId || !reviewerName?.trim() || !finalRating) {
+      return res.status(400).json({
+        success: false,
+        message: "Product, reviewer name and valid rating are required",
+      });
+    }
+
+const product = await prisma.product.findUnique({
+  where: { id: productId },
+  include: {
+    vendor: {
+      select: {
+        id: true,
+        userId: true,
+        shopName: true,
+      },
+    },
+  },
+});
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    const review = await prisma.review.create({
+      data: {
+        productId,
+        userId: null,
+        reviewerName: reviewerName.trim(),
+        reviewerAvatar: reviewerAvatar?.trim() || null,
+        rating: finalRating,
+        comment: comment?.trim() || "",
+        source: "ADMIN",
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatar: true,
+          },
+        },
+        product: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            images: true,
+          },
+        },
+      },
+    });
+    if (product.vendor?.userId) {
+  await prisma.notification.create({
+    data: {
+      userId: product.vendor.userId,
+      title: "New review added",
+      message: `${reviewerName.trim()} added a ${finalRating}-star review on ${product.name}`,
+      type: "NEW_REVIEW",
+      link: `/dashboard/reviews`,
+    },
+  });
+}
+
+    res.status(201).json({
+      success: true,
+      message: "Custom review created successfully",
+      review,
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const getAdminReviews = async (req, res) => {
+  try {
+    const {
+      search = "",
+      productId = "",
+      rating = "",
+      source = "",
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const take = Math.max(Number(limit) || 20, 1);
+    const skip = (currentPage - 1) * take;
+
+    const where = {};
+
+    if (productId) {
+      where.productId = productId;
+    }
+
+    if (rating) {
+      const finalRating = normalizeRating(rating);
+      if (finalRating) {
+        where.rating = finalRating;
+      }
+    }
+
+    if (source && ["USER", "ADMIN"].includes(source)) {
+      where.source = source;
+    }
+
+    if (search.trim()) {
+      const keyword = search.trim();
+
+      where.OR = [
+        {
+          comment: {
+            contains: keyword,
+            mode: "insensitive",
+          },
+        },
+        {
+          reviewerName: {
+            contains: keyword,
+            mode: "insensitive",
+          },
+        },
+        {
+          product: {
+            name: {
+              contains: keyword,
+              mode: "insensitive",
+            },
+          },
+        },
+        {
+          user: {
+            name: {
+              contains: keyword,
+              mode: "insensitive",
+            },
+          },
+        },
+        {
+          user: {
+            username: {
+              contains: keyword,
+              mode: "insensitive",
+            },
+          },
+        },
+      ];
+    }
+
+    const [reviews, total, allReviews, products] = await Promise.all([
+      prisma.review.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              username: true,
+              avatar: true,
+            },
+          },
+          product: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              images: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        skip,
+        take,
+      }),
+
+      prisma.review.count({ where }),
+
+      prisma.review.findMany({
+        select: {
+          rating: true,
+          source: true,
+        },
+      }),
+
+      prisma.product.findMany({
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      }),
+    ]);
+
+    const totalReviews = allReviews.length;
+    const ratingSum = allReviews.reduce((sum, item) => sum + item.rating, 0);
+
+    const formattedReviews = reviews.map((review) => ({
+      ...review,
+      displayReviewerName: getReviewerName(review),
+      displayReviewerAvatar: getReviewerAvatar(review),
+    }));
+
+    const stats = {
+      totalReviews,
+      averageRating: totalReviews
+        ? Number((ratingSum / totalReviews).toFixed(1))
+        : 0,
+      adminAdded: allReviews.filter((item) => item.source === "ADMIN").length,
+      userAdded: allReviews.filter((item) => item.source !== "ADMIN").length,
+      ratingBreakdown: {
+        5: allReviews.filter((item) => item.rating === 5).length,
+        4: allReviews.filter((item) => item.rating === 4).length,
+        3: allReviews.filter((item) => item.rating === 3).length,
+        2: allReviews.filter((item) => item.rating === 2).length,
+        1: allReviews.filter((item) => item.rating === 1).length,
+      },
+    };
+
+    res.json({
+      success: true,
+      reviews: formattedReviews,
+      products,
+      stats,
+      pagination: {
+        total,
+        page: currentPage,
+        limit: take,
+        totalPages: Math.ceil(total / take),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -318,47 +382,86 @@ export const getProductReviews = async (req, res) => {
     const { productId } = req.params;
 
     const reviews = await prisma.review.findMany({
-      where: { productId },
+      where: {
+        productId,
+      },
       include: {
         user: {
-          select: { id: true, name: true, username: true, avatar: true },
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatar: true,
+          },
         },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
 
     const average = await prisma.review.aggregate({
-      where: { productId },
-      _avg: { rating: true },
-      _count: { rating: true },
+      where: {
+        productId,
+      },
+      _avg: {
+        rating: true,
+      },
+      _count: {
+        rating: true,
+      },
     });
+
+    const formattedReviews = reviews.map((review) => ({
+      ...review,
+      displayReviewerName: getReviewerName(review),
+      displayReviewerAvatar: getReviewerAvatar(review),
+    }));
 
     res.json({
       success: true,
       averageRating: average._avg.rating || 0,
       totalReviews: average._count.rating || 0,
-      reviews,
+      reviews: formattedReviews,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 export const getMyReviews = async (req, res) => {
   try {
     const reviews = await prisma.review.findMany({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
       include: {
         product: {
-          select: { id: true, name: true, slug: true, images: true },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            images: true,
+          },
         },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
 
-    res.json({ success: true, reviews });
+    res.json({
+      success: true,
+      reviews,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -377,7 +480,9 @@ export const getVendorReviews = async (req, res) => {
     const skip = (currentPage - 1) * take;
 
     const vendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
     });
 
     if (!vendor) {
@@ -388,15 +493,26 @@ export const getVendorReviews = async (req, res) => {
     }
 
     const baseWhere = {
-      product: { vendorId: vendor.id },
+      product: {
+        vendorId: vendor.id,
+      },
     };
 
-    const where = { ...baseWhere };
+    const where = {
+      ...baseWhere,
+    };
 
-    if (rating) where.rating = Number(rating);
+    if (rating) {
+      const finalRating = normalizeRating(rating);
+      if (finalRating) {
+        where.rating = finalRating;
+      }
+    }
 
     if (replyStatus === "replied") {
-      where.vendorReply = { not: null };
+      where.vendorReply = {
+        not: null,
+      };
     }
 
     if (replyStatus === "unreplied") {
@@ -405,10 +521,42 @@ export const getVendorReviews = async (req, res) => {
 
     if (search.trim()) {
       where.OR = [
-        { comment: { contains: search.trim(), mode: "insensitive" } },
-        { product: { name: { contains: search.trim(), mode: "insensitive" } } },
-        { user: { name: { contains: search.trim(), mode: "insensitive" } } },
-        { user: { username: { contains: search.trim(), mode: "insensitive" } } },
+        {
+          comment: {
+            contains: search.trim(),
+            mode: "insensitive",
+          },
+        },
+        {
+          reviewerName: {
+            contains: search.trim(),
+            mode: "insensitive",
+          },
+        },
+        {
+          product: {
+            name: {
+              contains: search.trim(),
+              mode: "insensitive",
+            },
+          },
+        },
+        {
+          user: {
+            name: {
+              contains: search.trim(),
+              mode: "insensitive",
+            },
+          },
+        },
+        {
+          user: {
+            username: {
+              contains: search.trim(),
+              mode: "insensitive",
+            },
+          },
+        },
       ];
     }
 
@@ -417,17 +565,31 @@ export const getVendorReviews = async (req, res) => {
         where,
         include: {
           user: {
-            select: { id: true, name: true, username: true, avatar: true },
+            select: {
+              id: true,
+              name: true,
+              username: true,
+              avatar: true,
+            },
           },
           product: {
-            select: { id: true, name: true, slug: true, images: true },
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              images: true,
+            },
           },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: {
+          createdAt: "desc",
+        },
         skip,
         take,
       }),
+
       prisma.review.count({ where }),
+
       prisma.review.findMany({
         where: baseWhere,
         select: {
@@ -439,11 +601,18 @@ export const getVendorReviews = async (req, res) => {
 
     const totalReviews = allReviews.length;
     const ratingSum = allReviews.reduce((sum, item) => sum + item.rating, 0);
-    const averageRating = totalReviews ? Number((ratingSum / totalReviews).toFixed(1)) : 0;
+
+    const formattedReviews = reviews.map((review) => ({
+      ...review,
+      displayReviewerName: getReviewerName(review),
+      displayReviewerAvatar: getReviewerAvatar(review),
+    }));
 
     const stats = {
       totalReviews,
-      averageRating,
+      averageRating: totalReviews
+        ? Number((ratingSum / totalReviews).toFixed(1))
+        : 0,
       replied: allReviews.filter((item) => item.vendorReply).length,
       unreplied: allReviews.filter((item) => !item.vendorReply).length,
       ratingBreakdown: {
@@ -457,7 +626,7 @@ export const getVendorReviews = async (req, res) => {
 
     res.json({
       success: true,
-      reviews,
+      reviews: formattedReviews,
       stats,
       pagination: {
         total,
@@ -468,6 +637,7 @@ export const getVendorReviews = async (req, res) => {
     });
   } catch (error) {
     console.error("Vendor reviews error:", error);
+
     res.status(500).json({
       success: false,
       message: error.message,
@@ -480,7 +650,9 @@ export const getVendorProductReviews = async (req, res) => {
     const { productId } = req.params;
 
     const vendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
     });
 
     if (!vendor) {
@@ -491,7 +663,10 @@ export const getVendorProductReviews = async (req, res) => {
     }
 
     const product = await prisma.product.findFirst({
-      where: { id: productId, vendorId: vendor.id },
+      where: {
+        id: productId,
+        vendorId: vendor.id,
+      },
     });
 
     if (!product) {
@@ -502,21 +677,47 @@ export const getVendorProductReviews = async (req, res) => {
     }
 
     const reviews = await prisma.review.findMany({
-      where: { productId },
+      where: {
+        productId,
+      },
       include: {
         user: {
-          select: { id: true, name: true, username: true, avatar: true },
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatar: true,
+          },
         },
         product: {
-          select: { id: true, name: true, slug: true, images: true },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            images: true,
+          },
         },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
 
-    res.json({ success: true, reviews });
+    const formattedReviews = reviews.map((review) => ({
+      ...review,
+      displayReviewerName: getReviewerName(review),
+      displayReviewerAvatar: getReviewerAvatar(review),
+    }));
+
+    res.json({
+      success: true,
+      reviews: formattedReviews,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -533,7 +734,9 @@ export const replyVendorReview = async (req, res) => {
     }
 
     const vendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
     });
 
     if (!vendor) {
@@ -544,11 +747,16 @@ export const replyVendorReview = async (req, res) => {
     }
 
     const review = await prisma.review.findUnique({
-      where: { id: reviewId },
+      where: {
+        id: reviewId,
+      },
       include: {
         product: true,
         user: {
-          select: { id: true, name: true },
+          select: {
+            id: true,
+            name: true,
+          },
         },
       },
     });
@@ -561,38 +769,59 @@ export const replyVendorReview = async (req, res) => {
     }
 
     const updatedReview = await prisma.review.update({
-      where: { id: reviewId },
+      where: {
+        id: reviewId,
+      },
       data: {
         vendorReply: reply.trim(),
         vendorRepliedAt: new Date(),
       },
       include: {
         user: {
-          select: { id: true, name: true, username: true, avatar: true },
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatar: true,
+          },
         },
         product: {
-          select: { id: true, name: true, slug: true, images: true },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            images: true,
+          },
         },
       },
     });
 
-    await prisma.notification.create({
-      data: {
-        userId: review.userId,
-        title: "Vendor replied to your review",
-        message: `Vendor replied to your review on ${review.product.name}`,
-        type: "REVIEW_REPLY",
-        link: `/products/${review.product.slug || review.product.id}`,
-      },
-    });
+    if (review.userId) {
+      await prisma.notification.create({
+        data: {
+          userId: review.userId,
+          title: "Vendor replied to your review",
+          message: `Vendor replied to your review on ${review.product.name}`,
+          type: "REVIEW_REPLY",
+          link: `/products/${review.product.slug || review.product.id}`,
+        },
+      });
+    }
 
     res.json({
       success: true,
       message: "Reply submitted successfully",
-      review: updatedReview,
+      review: {
+        ...updatedReview,
+        displayReviewerName: getReviewerName(updatedReview),
+        displayReviewerAvatar: getReviewerAvatar(updatedReview),
+      },
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -601,7 +830,11 @@ export const updateReview = async (req, res) => {
     const { id } = req.params;
     const { rating, comment } = req.body;
 
-    const review = await prisma.review.findUnique({ where: { id } });
+    const review = await prisma.review.findUnique({
+      where: {
+        id,
+      },
+    });
 
     if (!review || review.userId !== req.user.id) {
       return res.status(404).json({
@@ -610,7 +843,9 @@ export const updateReview = async (req, res) => {
       });
     }
 
-    if (rating && (rating < 1 || rating > 5)) {
+    const finalRating = rating ? normalizeRating(rating) : review.rating;
+
+    if (!finalRating) {
       return res.status(400).json({
         success: false,
         message: "Rating must be between 1 and 5",
@@ -618,9 +853,11 @@ export const updateReview = async (req, res) => {
     }
 
     const updated = await prisma.review.update({
-      where: { id },
+      where: {
+        id,
+      },
       data: {
-        rating: rating || review.rating,
+        rating: finalRating,
         comment,
       },
     });
@@ -631,7 +868,10 @@ export const updateReview = async (req, res) => {
       review: updated,
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -639,7 +879,11 @@ export const deleteReview = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const review = await prisma.review.findUnique({ where: { id } });
+    const review = await prisma.review.findUnique({
+      where: {
+        id,
+      },
+    });
 
     if (!review) {
       return res.status(404).json({
@@ -649,7 +893,7 @@ export const deleteReview = async (req, res) => {
     }
 
     const isOwner = review.userId === req.user.id;
-    const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+    const isAdmin = isAdminRole(req.user.role);
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({
@@ -658,13 +902,20 @@ export const deleteReview = async (req, res) => {
       });
     }
 
-    await prisma.review.delete({ where: { id } });
+    await prisma.review.delete({
+      where: {
+        id,
+      },
+    });
 
     res.json({
       success: true,
       message: "Review deleted successfully",
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };

@@ -6,12 +6,7 @@ export const registerVendor = async (req, res) => {
   try {
     const data = vendorRegisterSchema.parse(req.body);
 
-    if (req.user.role !== "VENDOR") {
-      return res.status(403).json({
-        success: false,
-        message: "Only vendor users can register shop",
-      });
-    }
+
 
     const existingVendor = await prisma.vendor.findUnique({
       where: { userId: req.user.id },

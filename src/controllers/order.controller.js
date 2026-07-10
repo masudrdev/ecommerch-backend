@@ -263,50 +263,101 @@ export const getOrderDetails = async (req, res) => {
 };
 export const getAllOrdersForAdmin = async (req, res) => {
   try {
-    const orders = await prisma.order.findMany({
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const search = req.query.search?.trim() || "";
+    const status = req.query.status?.trim() || "";
+    const paymentStatus = req.query.paymentStatus?.trim() || "";
+    const sort = req.query.sort === "oldest" ? "asc" : "desc";
+
+    const where = {
+      ...(status ? { orderStatus: status } : {}),
+      ...(paymentStatus ? { paymentStatus } : {}),
+      ...(search
+        ? {
+            OR: [
+              { orderNumber: { contains: search, mode: "insensitive" } },
+              { customerName: { contains: search, mode: "insensitive" } },
+              { phone: { contains: search, mode: "insensitive" } },
+              {
+                user: {
+                  name: { contains: search, mode: "insensitive" },
+                },
+              },
+              {
+                user: {
+                  email: { contains: search, mode: "insensitive" },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+
+    const [orders, totalOrders] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        skip,
+        take: limit,
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+            },
           },
-        },
-        createdBy: {
-          select: {
-            id: true,
-            name: true,
-            role: true,
+          createdBy: {
+            select: {
+              id: true,
+              name: true,
+              role: true,
+            },
           },
-        },
-        items: {
-          include: {
-            product: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
+          items: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                  slug: true,
+                  images: {
+                    where: { isMain: true },
+                    select: { url: true },
+                    take: 1,
+                  },
+                },
+              },
+              vendor: {
+                select: {
+                  id: true,
+                  shopName: true,
+                  shopSlug: true,
+                },
               },
             },
-            vendor: {
-              select: {
-                id: true,
-                shopName: true,
-                shopSlug: true,
-              },
-            },
           },
         },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
+        orderBy: {
+          createdAt: sort,
+        },
+      }),
+
+      prisma.order.count({ where }),
+    ]);
 
     res.json({
       success: true,
       orders,
+      pagination: {
+        total: totalOrders,
+        page,
+        limit,
+        totalPages: Math.ceil(totalOrders / limit),
+      },
     });
   } catch (error) {
     res.status(500).json({

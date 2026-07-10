@@ -15,9 +15,10 @@ const router = express.Router();
 router.post(
   "/register",
   protect,
-  allowRoles("VENDOR"),
+  allowRoles("CUSTOMER"),
   registerVendor
 );
+
 
 
 router.get(

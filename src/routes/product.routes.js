@@ -42,7 +42,7 @@ router.get(
 router.put(
   "/:id/variants",
   protect,
-  allowRoles("VENDOR"),
+  allowRoles("VENDOR","admin", "SUPER_ADMIN"),
   replaceProductVariants
 );
 
