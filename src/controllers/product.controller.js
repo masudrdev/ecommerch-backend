@@ -349,6 +349,10 @@ await createNotification({
     });
   }
 };
+
+
+
+
 export const uploadProductImages = async (req, res) => {
   try {
     const { id } = req.params;
@@ -456,6 +460,7 @@ export const addProductVariants = async (req, res) => {
     res.status(400).json({ success: false, message: error.message });
   }
 };
+
 // export const updateProduct = async (req, res) => {
 //   try {
 //     const { id } = req.params;
@@ -472,22 +477,49 @@ export const addProductVariants = async (req, res) => {
 //       });
 //     }
 
-//     if (product.vendor.userId !== req.user.id) {
+//     const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+
+//     if (!isAdmin && product.vendor.userId !== req.user.id) {
 //       return res.status(403).json({
 //         success: false,
 //         message: "Not your product",
 //       });
 //     }
 
-//     const updatedProduct = await prisma.product.update({
+//     const data = {
+//       name: req.body.name,
+//       description: req.body.description,
+//       price: Number(req.body.price),
+//       salePrice:
+//         req.body.salePrice === null ||
+//         req.body.salePrice === ""
+//           ? null
+//           : Number(req.body.salePrice),
+
+//       deliveryCharge: Number(req.body.deliveryCharge || 0),
+//       outsideDistrictExtraCharge: Number(
+//         req.body.outsideDistrictExtraCharge || 35
+//       ),
+
+//       stock: Number(req.body.stock || 0),
+
+//       categoryId: req.body.categoryId || null,
+//       brandId: req.body.brandId || null,
+//     };
+
+//     if (!isAdmin) {
+//       data.status = "PENDING";
+//     }
+
+//     const updated = await prisma.product.update({
 //       where: { id },
-//       data: req.body,
+//       data,
 //     });
 
 //     res.json({
 //       success: true,
-//       message: "Product updated successfully",
-//       product: updatedProduct,
+//       message: "Product updated successfully.",
+//       product: updated,
 //     });
 //   } catch (error) {
 //     res.status(400).json({
@@ -496,13 +528,16 @@ export const addProductVariants = async (req, res) => {
 //     });
 //   }
 // };
+
 export const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
 
     const product = await prisma.product.findUnique({
       where: { id },
-      include: { vendor: true },
+      include: {
+        vendor: true,
+      },
     });
 
     if (!product) {
@@ -512,26 +547,187 @@ export const updateProduct = async (req, res) => {
       });
     }
 
-    const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+    const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(
+      req.user.role
+    );
 
-    if (!isAdmin && product.vendor.userId !== req.user.id) {
+    const isOwner =
+      product.vendor.userId === req.user.id;
+
+    if (!isAdmin && !isOwner) {
       return res.status(403).json({
         success: false,
-        message: "Not your product",
+        message: "You are not allowed to update this product",
       });
     }
 
+    /*
+     * ADMIN / SUPER_ADMIN
+     * শুধু category এবং commission update করতে পারবে।
+     */
+    if (isAdmin) {
+      const {
+        categoryId,
+        commissionType,
+        commissionValue,
+      } = req.body;
+
+      if (!categoryId) {
+        return res.status(400).json({
+          success: false,
+          message: "Category is required",
+        });
+      }
+
+      const category = await prisma.category.findUnique({
+        where: {
+          id: categoryId,
+        },
+        select: {
+          id: true,
+          name: true,
+        },
+      });
+
+      if (!category) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected category not found",
+        });
+      }
+
+      const hasCommissionType =
+        commissionType !== undefined &&
+        commissionType !== null &&
+        commissionType !== "";
+
+      const hasCommissionValue =
+        commissionValue !== undefined &&
+        commissionValue !== null &&
+        commissionValue !== "";
+
+      if (hasCommissionType !== hasCommissionValue) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Commission type and commission value must be provided together",
+        });
+      }
+
+      let normalizedCommissionType = null;
+      let normalizedCommissionValue = null;
+
+      if (hasCommissionType && hasCommissionValue) {
+        if (
+          !["PERCENTAGE", "FIXED"].includes(
+            commissionType
+          )
+        ) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Commission type must be PERCENTAGE or FIXED",
+          });
+        }
+
+        const numericCommissionValue =
+          Number(commissionValue);
+
+        if (
+          !Number.isFinite(numericCommissionValue) ||
+          numericCommissionValue < 0
+        ) {
+          return res.status(400).json({
+            success: false,
+            message: "Enter a valid commission value",
+          });
+        }
+
+        if (
+          commissionType === "PERCENTAGE" &&
+          numericCommissionValue > 100
+        ) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Percentage commission cannot exceed 100",
+          });
+        }
+
+        const sellingPrice =
+          product.salePrice !== null &&
+          product.salePrice !== undefined
+            ? Number(product.salePrice)
+            : Number(product.price);
+
+        if (
+          commissionType === "FIXED" &&
+          numericCommissionValue > sellingPrice
+        ) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Fixed commission cannot exceed product selling price",
+          });
+        }
+
+        normalizedCommissionType = commissionType;
+        normalizedCommissionValue =
+          numericCommissionValue;
+      }
+
+      const updatedProduct = await prisma.product.update({
+        where: {
+          id,
+        },
+        data: {
+          categoryId,
+          commissionType: normalizedCommissionType,
+          commissionValue: normalizedCommissionValue,
+        },
+        include: {
+          category: true,
+          brand: true,
+          vendor: {
+            select: {
+              id: true,
+              shopName: true,
+              userId: true,
+            },
+          },
+          images: true,
+          variants: true,
+        },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "Product category and commission updated successfully",
+        product: updatedProduct,
+      });
+    }
+
+    /*
+     * VENDOR
+     * Vendor নিজের product-এর normal editable fields update করবে।
+     * Update করলে product আবার PENDING হবে।
+     */
     const data = {
       name: req.body.name,
       description: req.body.description,
       price: Number(req.body.price),
+
       salePrice:
         req.body.salePrice === null ||
         req.body.salePrice === ""
           ? null
           : Number(req.body.salePrice),
 
-      deliveryCharge: Number(req.body.deliveryCharge || 0),
+      deliveryCharge: Number(
+        req.body.deliveryCharge || 0
+      ),
+
       outsideDistrictExtraCharge: Number(
         req.body.outsideDistrictExtraCharge || 35
       ),
@@ -540,26 +736,40 @@ export const updateProduct = async (req, res) => {
 
       categoryId: req.body.categoryId || null,
       brandId: req.body.brandId || null,
+
+      status: "PENDING",
+
+      rejectionReason: null,
+      approvedAt: null,
+      rejectedAt: null,
     };
 
-    if (!isAdmin) {
-      data.status = "PENDING";
-    }
-
-    const updated = await prisma.product.update({
-      where: { id },
+    const updatedProduct = await prisma.product.update({
+      where: {
+        id,
+      },
       data,
+      include: {
+        category: true,
+        brand: true,
+        images: true,
+        variants: true,
+      },
     });
 
-    res.json({
+    return res.status(200).json({
       success: true,
-      message: "Product updated successfully.",
-      product: updated,
+      message:
+        "Product updated successfully and submitted for admin review",
+      product: updatedProduct,
     });
   } catch (error) {
-    res.status(400).json({
+    console.error("Update Product Error:", error);
+
+    return res.status(400).json({
       success: false,
-      message: error.message,
+      message:
+        error.message || "Unable to update product",
     });
   }
 };
@@ -792,6 +1002,7 @@ export const deleteProductImage = async (req, res) => {
   }
 };
 
+
 export const getAdminProducts = async (req, res) => {
   try {
     const {
@@ -804,24 +1015,177 @@ export const getAdminProducts = async (req, res) => {
       limit = 20,
     } = req.query;
 
-    const skip = (Number(page) - 1) * Number(limit);
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const limitNumber = Math.max(Number(limit) || 20, 1);
+    const skip = (pageNumber - 1) * limitNumber;
+
+    /**
+     * Selected category-এর সব child ও grandchild ID বের করবে।
+     *
+     * Example:
+     * Fashion
+     * └── man
+     *     └── pant
+     *
+     * Fashion select করলে:
+     * [FashionId, manId, pantId]
+     *
+     * man select করলে:
+     * [manId, pantId]
+     *
+     * pant select করলে:
+     * [pantId]
+     */
+    const getCategoryAndDescendantIds = async (
+      selectedCategoryId
+    ) => {
+      if (!selectedCategoryId) return [];
+
+      const allCategories = await prisma.category.findMany({
+        select: {
+          id: true,
+          parentId: true,
+        },
+      });
+
+      const childrenMap = new Map();
+
+      for (const category of allCategories) {
+        const parentKey = category.parentId || null;
+
+        if (!childrenMap.has(parentKey)) {
+          childrenMap.set(parentKey, []);
+        }
+
+        childrenMap.get(parentKey).push(category.id);
+      }
+
+      const categoryIds = [];
+      const queue = [selectedCategoryId];
+      const visited = new Set();
+
+      while (queue.length > 0) {
+        const currentCategoryId = queue.shift();
+
+        if (
+          !currentCategoryId ||
+          visited.has(currentCategoryId)
+        ) {
+          continue;
+        }
+
+        visited.add(currentCategoryId);
+        categoryIds.push(currentCategoryId);
+
+        const childIds =
+          childrenMap.get(currentCategoryId) || [];
+
+        queue.push(...childIds);
+      }
+
+      return categoryIds;
+    };
+
+    let categoryIds = [];
+
+    if (categoryId) {
+      const selectedCategory =
+        await prisma.category.findUnique({
+          where: {
+            id: categoryId,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+      if (!selectedCategory) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected category not found",
+        });
+      }
+
+      categoryIds =
+        await getCategoryAndDescendantIds(categoryId);
+    }
 
     const where = {
       ...(search
-        ? { name: { contains: search, mode: "insensitive" } }
+        ? {
+            name: {
+              contains: search,
+              mode: "insensitive",
+            },
+          }
         : {}),
-      ...(categoryId ? { categoryId } : {}),
-      ...(vendorId ? { vendorId } : {}),
-      ...(status !== "ALL" ? { status } : {}),
+
+      ...(categoryIds.length > 0
+        ? {
+            categoryId: {
+              in: categoryIds,
+            },
+          }
+        : {}),
+
+      ...(vendorId
+        ? {
+            vendorId,
+          }
+        : {}),
+
+      ...(status !== "ALL"
+        ? {
+            status,
+          }
+        : {}),
     };
 
-    let orderBy = { createdAt: "desc" };
+    let orderBy = {
+      createdAt: "desc",
+    };
 
-    if (sort === "oldest") orderBy = { createdAt: "asc" };
-    if (sort === "price_low") orderBy = { salePrice: "asc" };
-    if (sort === "price_high") orderBy = { salePrice: "desc" };
-    if (sort === "stock_low") orderBy = { stock: "asc" };
-    if (sort === "stock_high") orderBy = { stock: "desc" };
+    if (sort === "oldest") {
+      orderBy = {
+        createdAt: "asc",
+      };
+    }
+
+    if (
+      sort === "price_low" ||
+      sort === "price_asc"
+    ) {
+      orderBy = {
+        salePrice: "asc",
+      };
+    }
+
+    if (
+      sort === "price_high" ||
+      sort === "price_desc"
+    ) {
+      orderBy = {
+        salePrice: "desc",
+      };
+    }
+
+    if (
+      sort === "stock_low" ||
+      sort === "stock_asc"
+    ) {
+      orderBy = {
+        stock: "asc",
+      };
+    }
+
+    if (
+      sort === "stock_high" ||
+      sort === "stock_desc"
+    ) {
+      orderBy = {
+        stock: "desc",
+      };
+    }
 
     const [products, total] = await Promise.all([
       prisma.product.findMany({
@@ -841,32 +1205,53 @@ export const getAdminProducts = async (req, res) => {
         },
         orderBy,
         skip,
-        take: Number(limit),
+        take: limitNumber,
       }),
 
-      prisma.product.count({ where }),
+      prisma.product.count({
+        where,
+      }),
     ]);
 
-    res.json({
+    return res.json({
       success: true,
       products,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / Number(limit)),
+        page: pageNumber,
+        limit: limitNumber,
+        totalPages: Math.max(
+          Math.ceil(total / limitNumber),
+          1
+        ),
       },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get Admin Products Error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message:
+        error.message || "Unable to load admin products",
     });
   }
 };
+
+
+
 // export const getAdminProducts = async (req, res) => {
 //   try {
-//     const { search = "", categoryId = "", vendorId = "" } = req.query;
+//     const {
+//       search = "",
+//       categoryId = "",
+//       vendorId = "",
+//       status = "ALL",
+//       sort = "newest",
+//       page = 1,
+//       limit = 20,
+//     } = req.query;
+
+//     const skip = (Number(page) - 1) * Number(limit);
 
 //     const where = {
 //       ...(search
@@ -874,29 +1259,50 @@ export const getAdminProducts = async (req, res) => {
 //         : {}),
 //       ...(categoryId ? { categoryId } : {}),
 //       ...(vendorId ? { vendorId } : {}),
+//       ...(status !== "ALL" ? { status } : {}),
 //     };
 
-//     const products = await prisma.product.findMany({
-//       where,
-//       include: {
-//         category: true,
-//         brand: true,
-//         vendor: {
-//           select: {
-//             id: true,
-//             shopName: true,
-//             shopSlug: true,
+//     let orderBy = { createdAt: "desc" };
+
+//     if (sort === "oldest") orderBy = { createdAt: "asc" };
+//     if (sort === "price_low") orderBy = { salePrice: "asc" };
+//     if (sort === "price_high") orderBy = { salePrice: "desc" };
+//     if (sort === "stock_low") orderBy = { stock: "asc" };
+//     if (sort === "stock_high") orderBy = { stock: "desc" };
+
+//     const [products, total] = await Promise.all([
+//       prisma.product.findMany({
+//         where,
+//         include: {
+//           category: true,
+//           brand: true,
+//           vendor: {
+//             select: {
+//               id: true,
+//               shopName: true,
+//               shopSlug: true,
+//             },
 //           },
+//           images: true,
+//           variants: true,
 //         },
-//         images: true,
-//         variants: true,
-//       },
-//       orderBy: { createdAt: "desc" },
-//     });
+//         orderBy,
+//         skip,
+//         take: Number(limit),
+//       }),
+
+//       prisma.product.count({ where }),
+//     ]);
 
 //     res.json({
 //       success: true,
 //       products,
+//       pagination: {
+//         total,
+//         page: Number(page),
+//         limit: Number(limit),
+//         totalPages: Math.ceil(total / Number(limit)),
+//       },
 //     });
 //   } catch (error) {
 //     res.status(500).json({
@@ -905,3 +1311,5 @@ export const getAdminProducts = async (req, res) => {
 //     });
 //   }
 // };
+
+

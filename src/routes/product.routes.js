@@ -55,7 +55,7 @@ router.delete(
 
 router.get("/:slug", getProductBySlug);
 router.patch("/:id/status", protect, allowRoles("ADMIN", "SUPER_ADMIN"), updateProductStatus);
-router.patch("/:id", protect, allowRoles("VENDOR"), updateProduct);
+router.patch("/:id", protect, allowRoles("VENDOR", "ADMIN", "SUPER_ADMIN"), updateProduct);
 router.delete("/:id", protect, allowRoles("VENDOR"), deleteProduct);
 router.post("/:id/images", protect, allowRoles("VENDOR"), upload.array("images", 5), uploadProductImages);
 router.post("/:id/variants", protect, allowRoles("VENDOR"), addProductVariants);
