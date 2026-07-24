@@ -190,18 +190,31 @@ export const getMyOrders = async (req, res) => {
     });
   }
 };
+
 export const getOrderDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
     const order = await prisma.order.findUnique({
-      where: { id },
+      where: {
+        id,
+      },
+
       include: {
         user: {
           select: {
             id: true,
             name: true,
             email: true,
+            phone: true,
+          },
+        },
+
+        createdBy: {
+          select: {
+            id: true,
+            name: true,
+            role: true,
           },
         },
 
@@ -214,6 +227,16 @@ export const getOrderDetails = async (req, res) => {
                 slug: true,
                 price: true,
                 salePrice: true,
+
+                images: {
+                  where: {
+                    isMain: true,
+                  },
+                  select: {
+                    url: true,
+                  },
+                  take: 1,
+                },
               },
             },
 
@@ -222,6 +245,44 @@ export const getOrderDetails = async (req, res) => {
                 id: true,
                 shopName: true,
                 shopSlug: true,
+              },
+            },
+          },
+        },
+
+        timelines: {
+          orderBy: {
+            createdAt: "asc",
+          },
+
+          select: {
+            id: true,
+            orderId: true,
+            itemId: true,
+            title: true,
+            details: true,
+            type: true,
+            createdAt: true,
+
+            user: {
+              select: {
+                id: true,
+                name: true,
+                role: true,
+              },
+            },
+
+            item: {
+              select: {
+                id: true,
+                itemStatus: true,
+
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                  },
+                },
               },
             },
           },
@@ -250,17 +311,33 @@ export const getOrderDetails = async (req, res) => {
       });
     }
 
-    res.json({
+    return res.status(200).json({
       success: true,
-      order,
+
+      order: {
+        ...order,
+
+        // Frontend বর্তমানে order.timeline ব্যবহার করছে।
+        timeline: order.timelines || [],
+      },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error(
+      "Get order details error:",
+      error
+    );
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message:
+        error.message ||
+        "Failed to get order details",
     });
   }
 };
+
+
+
 export const getAllOrdersForAdmin = async (req, res) => {
   try {
     const page = Number(req.query.page) || 1;
@@ -994,7 +1071,11 @@ export const getVendorOrders = async (req, res) => {
     const groupedOrders = Array.from(groupedMap.values());
 
     const getVendorStatus = (items) => {
-      const statuses = items.map((item) => item.itemStatus);
+      const statuses = items.map((item) =>
+  item.itemStatus === "RESHIPPED"
+    ? "SHIPPED"
+    : item.itemStatus
+);
 
       if (statuses.every((s) => s === "SHIPPED")) return "SHIPPED";
       if (statuses.includes("SHIPPED")) return "PARTIALLY_SHIPPED";
@@ -1137,37 +1218,90 @@ export const updateVendorOrderStatus = async (req, res) => {
     });
   }
 };
-const syncMainOrderStatusFromItems = async (orderId) => {
-  const items = await prisma.orderItem.findMany({
-    where: { orderId },
-    select: { itemStatus: true },
+
+
+const syncMainOrderStatusFromItems = async (
+  orderId,
+  prismaClient = prisma
+) => {
+  const items =
+    await prismaClient.orderItem.findMany({
+      where: {
+        orderId,
+      },
+      select: {
+        itemStatus: true,
+      },
+    });
+
+  if (!items.length) {
+    return null;
+  }
+
+  /*
+   * Item-এর actual status RESHIPPED থাকবে।
+   * Main order calculation-এ এটাকে SHIPPED ধরা হবে।
+   */
+  const statuses = items.map((item) => {
+    const status = String(
+      item.itemStatus || "PENDING"
+    ).toUpperCase();
+
+    return status === "RESHIPPED"
+      ? "SHIPPED"
+      : status;
   });
 
-  if (!items.length) return;
-
-  const statuses = items.map((item) => item.itemStatus);
+  const allSame = statuses.every(
+    (status) => status === statuses[0]
+  );
 
   let newOrderStatus = "PENDING";
 
-  if (statuses.every((status) => status === "SHIPPED")) {
-    newOrderStatus = "SHIPPED";
-  } else if (statuses.includes("SHIPPED")) {
-    newOrderStatus = "PARTIALLY_SHIPPED";
-  } else if (statuses.every((status) => status === "PROCESSING")) {
-    newOrderStatus = "PROCESSING";
-  } else if (statuses.includes("PROCESSING")) {
-    newOrderStatus = "PARTIALLY_PROCESSING";
-  } else if (statuses.every((status) => status === "CONFIRMED")) {
-    newOrderStatus = "CONFIRMED";
-  } else if (statuses.includes("CONFIRMED")) {
-    newOrderStatus = "PARTIALLY_CONFIRMED";
+  if (allSame) {
+    newOrderStatus = statuses[0];
+  } else if (
+    statuses.includes("COMPLETED")
+  ) {
+    newOrderStatus =
+      "PARTIALLY_COMPLETED";
+  } else if (
+    statuses.includes("DELIVERED")
+  ) {
+    newOrderStatus =
+      "PARTIALLY_DELIVERED";
+  } else if (
+    statuses.includes("SHIPPED")
+  ) {
+    newOrderStatus =
+      "PARTIALLY_SHIPPED";
+  } else if (
+    statuses.includes("PROCESSING")
+  ) {
+    newOrderStatus =
+      "PARTIALLY_PROCESSING";
+  } else if (
+    statuses.includes("CONFIRMED")
+  ) {
+    newOrderStatus =
+      "PARTIALLY_CONFIRMED";
+  } else if (
+    statuses.includes("CANCELLED")
+  ) {
+    newOrderStatus =
+      "PARTIALLY_CANCELLED";
   }
 
-  await prisma.order.update({
-    where: { id: orderId },
-    data: { orderStatus: newOrderStatus },
+  return prismaClient.order.update({
+    where: {
+      id: orderId,
+    },
+    data: {
+      orderStatus: newOrderStatus,
+    },
   });
 };
+
 export const updateVendorOrderItemStatus = async (req, res) => {
   try {
     const { itemId } = req.params;
@@ -1395,20 +1529,106 @@ await tx.orderTimeline.create({
   }
 
 };
-const getVendorStatusFromItems = (items) => {
-  const statuses = items.map((item) => item.itemStatus);
+// const getVendorStatusFromItems = (items) => {
+//   const statuses = items.map((item) =>
+//   item.itemStatus === "RESHIPPED"
+//     ? "SHIPPED"
+//     : item.itemStatus
+// );
 
-  if (statuses.every((s) => s === "SHIPPED")) return "SHIPPED";
-  if (statuses.includes("SHIPPED")) return "PARTIALLY_SHIPPED";
+//   if (statuses.every((s) => s === "SHIPPED")) return "SHIPPED";
+//   if (statuses.includes("SHIPPED")) return "PARTIALLY_SHIPPED";
 
-  if (statuses.every((s) => s === "PROCESSING")) return "PROCESSING";
-  if (statuses.includes("PROCESSING")) return "PARTIALLY_PROCESSING";
+//   if (statuses.every((s) => s === "PROCESSING")) return "PROCESSING";
+//   if (statuses.includes("PROCESSING")) return "PARTIALLY_PROCESSING";
 
-  if (statuses.every((s) => s === "CONFIRMED")) return "CONFIRMED";
-  if (statuses.includes("CONFIRMED")) return "PARTIALLY_CONFIRMED";
+//   if (statuses.every((s) => s === "CONFIRMED")) return "CONFIRMED";
+//   if (statuses.includes("CONFIRMED")) return "PARTIALLY_CONFIRMED";
+
+//   return "PENDING";
+// };
+const getVendorStatusFromItems = (
+  items = []
+) => {
+  if (
+    !Array.isArray(items) ||
+    items.length === 0
+  ) {
+    return "PENDING";
+  }
+
+  const statuses = items.map(
+    (item) =>
+      item.itemStatus ===
+      "RESHIPPED"
+        ? "SHIPPED"
+        : item.itemStatus
+  );
+
+  const uniqueStatuses = [
+    ...new Set(statuses),
+  ];
+
+  if (uniqueStatuses.length === 1) {
+    return uniqueStatuses[0];
+  }
+
+  /*
+   * Mixed status হলে furthest progress
+   * অনুযায়ী Vendor Status দেখাবে।
+   */
+
+  if (
+    statuses.includes(
+      "COMPLETED"
+    )
+  ) {
+    return "PARTIALLY_COMPLETED";
+  }
+
+  if (
+    statuses.includes(
+      "DELIVERED"
+    )
+  ) {
+    return "PARTIALLY_DELIVERED";
+  }
+
+  if (
+    statuses.includes("SHIPPED")
+  ) {
+    return "PARTIALLY_SHIPPED";
+  }
+
+  if (
+    statuses.includes(
+      "PROCESSING"
+    )
+  ) {
+    return "PARTIALLY_PROCESSING";
+  }
+
+  if (
+    statuses.includes(
+      "CONFIRMED"
+    )
+  ) {
+    return "PARTIALLY_CONFIRMED";
+  }
+
+  if (
+    statuses.includes(
+      "CANCELLED"
+    )
+  ) {
+    return "PARTIALLY_CANCELLED";
+  }
 
   return "PENDING";
 };
+
+
+
 export const getVendorOrderDetails = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -1482,33 +1702,54 @@ export const getVendorOrderDetails = async (req, res) => {
           },
         },
 
-        items: {
+items: {
+  where: {
+    vendorId: vendor.id,
+  },
+
+  select: {
+    id: true,
+    itemStatus: true,
+
+    returnStatus: true,
+    deliveredAt: true,
+    completedAt: true,
+    returnRequestedAt: true,
+    returnResolvedAt: true,
+
+    quantity: true,
+    price: true,
+    size: true,
+    color: true,
+    stockReduced: true,
+
+    vendor: {
+      select: {
+        id: true,
+        shopName: true,
+        shopSlug: true,
+      },
+    },
+
+    product: {
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+
+        images: {
           where: {
-            vendorId: vendor.id,
+            isMain: true,
           },
           select: {
-            id: true,
-            itemStatus: true,
-            quantity: true,
-            price: true,
-            size: true,
-            color: true,
-            stockReduced: true,
-
-            product: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
-                images: {
-                  where: { isMain: true },
-                  select: { url: true },
-                  take: 1,
-                },
-              },
-            },
+            url: true,
           },
+          take: 1,
         },
+      },
+    },
+  },
+},
       },
     });
 
@@ -1630,6 +1871,699 @@ export const addVendorOrderNote = async (req, res) => {
     return res.status(400).json({
       success: false,
       message: error.message,
+    });
+  }
+};
+export const updateOrderItemStatusByAdmin = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+
+    const itemStatus = String(
+      req.body.itemStatus || req.body.status || ""
+    ).toUpperCase();
+
+    const allowedStatuses = [
+      "CONFIRMED",
+      "PROCESSING",
+      "SHIPPED",
+      "DELIVERED",
+      "COMPLETED",
+      "CANCELLED",
+    ];
+
+    if (!itemStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "Item status is required",
+      });
+    }
+
+    if (!allowedStatuses.includes(itemStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid item status",
+      });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existingItem = await tx.orderItem.findUnique({
+        where: { id: itemId },
+        include: {
+          product: true,
+        },
+      });
+
+      if (!existingItem) {
+        throw new Error("Order item not found");
+      }
+
+      if (
+        ["COMPLETED", "CANCELLED"].includes(
+          existingItem.itemStatus
+        )
+      ) {
+        throw new Error("This item is locked");
+      }
+
+const nextStatusMap = {
+  PENDING: "CONFIRMED",
+  CONFIRMED: "PROCESSING",
+  PROCESSING: "SHIPPED",
+  SHIPPED: "DELIVERED",
+  RESHIPPED: "DELIVERED",
+  DELIVERED: "COMPLETED",
+};
+
+      if (itemStatus !== "CANCELLED") {
+        const allowedNextStatus =
+          nextStatusMap[existingItem.itemStatus];
+
+        if (itemStatus !== allowedNextStatus) {
+          throw new Error(
+            `Admin can only update ${existingItem.itemStatus} to ${allowedNextStatus}`
+          );
+        }
+      }
+
+ const updatedItem = await tx.orderItem.update({
+  where: {
+    id: itemId,
+  },
+
+data: {
+  itemStatus,
+
+  ...(itemStatus === "DELIVERED"
+    ? {
+        deliveredAt: new Date(),
+        completedAt: null,
+
+        returnStatus:
+          existingItem.returnStatus ===
+          "RESHIPPED"
+            ? "RESOLVED"
+            : existingItem.returnStatus,
+
+        returnResolvedAt:
+          existingItem.returnStatus ===
+          "RESHIPPED"
+            ? new Date()
+            : existingItem.returnResolvedAt,
+      }
+    : {}),
+
+  ...(itemStatus === "COMPLETED"
+    ? {
+        completedAt: new Date(),
+      }
+    : {}),
+},
+
+  include: {
+    product: {
+      select: {
+        id: true,
+        name: true,
+        images: true,
+      },
+    },
+  },
+});
+
+      await tx.orderTimeline.create({
+        data: {
+          orderId: existingItem.orderId,
+          itemId: existingItem.id,
+          userId: req.user.id,
+          title: `Item ${itemStatus}`,
+          details: `${existingItem.product.name} changed from ${existingItem.itemStatus} to ${itemStatus}`,
+          type: "STATUS",
+        },
+      });
+
+      const updatedOrder =
+        await syncMainOrderStatusFromItems(
+          existingItem.orderId,
+          tx
+        );
+
+      return {
+        updatedItem,
+        updatedOrder,
+        oldStatus: existingItem.itemStatus,
+      };
+    });
+
+    await createActivityLog({
+      userId: req.user.id,
+      action: "ADMIN_ORDER_ITEM_STATUS_UPDATED",
+      entityType: "ORDER_ITEM",
+      entityId: result.updatedItem.id,
+      oldData: {
+        itemStatus: result.oldStatus,
+      },
+      newData: {
+        itemStatus: result.updatedItem.itemStatus,
+        orderStatus: result.updatedOrder.orderStatus,
+      },
+      req,
+    });
+
+    return res.json({
+      success: true,
+      message: "Item and main order status updated",
+      item: result.updatedItem,
+      order: result.updatedOrder,
+    });
+  } catch (error) {
+    console.error(
+      "Admin order item status error:",
+      error
+    );
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+export const requestOrderItemReturnByCustomer = async (
+  req,
+  res
+) => {
+  try {
+    const { itemId } = req.params;
+
+    const { reason } = req.body;
+
+    const orderItem =
+      await prisma.orderItem.findFirst({
+        where: {
+          id: itemId,
+
+          order: {
+            userId: req.user.id,
+          },
+        },
+
+        include: {
+          product: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+
+          order: {
+            select: {
+              id: true,
+              orderNumber: true,
+              userId: true,
+            },
+          },
+        },
+      });
+
+    if (!orderItem) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Order item not found for this customer",
+      });
+    }
+
+    if (
+      orderItem.itemStatus !== "DELIVERED"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only delivered items can be returned",
+      });
+    }
+
+    if (
+      !["NONE", "RESOLVED"].includes(
+        orderItem.returnStatus
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A return request already exists for this item",
+      });
+    }
+
+    if (!orderItem.deliveredAt) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Delivered time was not found for this item",
+      });
+    }
+
+    const returnWindowMilliseconds =
+      3 * 24 * 60 * 60 * 1000;
+
+    const returnDeadline =
+      new Date(
+        orderItem.deliveredAt
+      ).getTime() +
+      returnWindowMilliseconds;
+
+    if (Date.now() > returnDeadline) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The 3-day return window has expired",
+      });
+    }
+
+    const updatedItem =
+      await prisma.$transaction(
+        async (tx) => {
+          const item =
+            await tx.orderItem.update({
+              where: {
+                id: itemId,
+              },
+
+              data: {
+                returnStatus:
+                  "REQUESTED",
+
+                returnRequestedAt:
+                  new Date(),
+              },
+
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    images: true,
+                  },
+                },
+              },
+            });
+
+          await tx.orderTimeline.create({
+            data: {
+              orderId:
+                orderItem.orderId,
+
+              itemId:
+                orderItem.id,
+
+              userId:
+                req.user.id,
+
+              title:
+                "Return Requested",
+
+              details:
+                reason?.trim()
+                  ? `${
+                      orderItem.product.name
+                    } — ${reason.trim()}`
+                  : `${orderItem.product.name} return requested by customer`,
+
+              type: "RETURN",
+            },
+          });
+
+          return item;
+        }
+      );
+
+    await createActivityLog({
+      userId: req.user.id,
+
+      action:
+        "CUSTOMER_RETURN_REQUESTED",
+
+      entityType: "ORDER_ITEM",
+
+      entityId: updatedItem.id,
+
+      oldData: {
+        returnStatus:
+          orderItem.returnStatus,
+      },
+
+      newData: {
+        returnStatus:
+          updatedItem.returnStatus,
+
+        returnRequestedAt:
+          updatedItem.returnRequestedAt,
+      },
+
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+
+      message:
+        "Return request submitted successfully",
+
+      item: updatedItem,
+    });
+  } catch (error) {
+    console.error(
+      "Customer return request error:",
+      error
+    );
+
+    return res.status(400).json({
+      success: false,
+
+      message:
+        error.message ||
+        "Failed to submit return request",
+    });
+  }
+};
+export const updateOrderItemReturnByVendor = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+
+    const returnStatus = String(
+      req.body.returnStatus || req.body.status || ""
+    ).toUpperCase();
+
+    const allowedStatuses = [
+      "APPROVED",
+      "REJECTED",
+      "IN_TRANSIT",
+      "RECEIVED",
+      "RESHIPPED",
+    ];
+
+    if (!returnStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "Return status is required",
+      });
+    }
+
+    if (!allowedStatuses.includes(returnStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid return status",
+      });
+    }
+
+    const vendor = await prisma.vendor.findUnique({
+      where: {
+        userId: req.user.id,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!vendor) {
+      return res.status(403).json({
+        success: false,
+        message: "Vendor account not found",
+      });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const existingItem = await tx.orderItem.findFirst({
+        where: {
+          id: itemId,
+          vendorId: vendor.id,
+        },
+        include: {
+          product: {
+            select: {
+              id: true,
+              name: true,
+            },
+          },
+        },
+      });
+
+      if (!existingItem) {
+        throw new Error(
+          "Order item not found or this item does not belong to you"
+        );
+      }
+
+      const nextReturnStatusMap = {
+        REQUESTED: ["APPROVED", "REJECTED"],
+        APPROVED: ["IN_TRANSIT"],
+        IN_TRANSIT: ["RECEIVED"],
+        RECEIVED: ["RESHIPPED"],
+      };
+
+      const allowedNextStatuses =
+        nextReturnStatusMap[existingItem.returnStatus] || [];
+
+      if (!allowedNextStatuses.includes(returnStatus)) {
+        throw new Error(
+          `Return status cannot be changed from ${existingItem.returnStatus} to ${returnStatus}`
+        );
+      }
+
+      const updateData = {
+        returnStatus,
+      };
+
+      /*
+       * Vendor replacement পাঠালে item আবার SHIPPED হবে।
+       */
+     if (returnStatus === "RESHIPPED") {
+  updateData.itemStatus = "RESHIPPED";
+  updateData.deliveredAt = null;
+  updateData.completedAt = null;
+  updateData.returnResolvedAt = null;
+}
+
+      const updatedItem = await tx.orderItem.update({
+        where: {
+          id: itemId,
+        },
+        data: updateData,
+        include: {
+          product: {
+            select: {
+              id: true,
+              name: true,
+              images: true,
+            },
+          },
+        },
+      });
+
+      await tx.orderTimeline.create({
+        data: {
+          orderId: existingItem.orderId,
+          itemId: existingItem.id,
+          userId: req.user.id,
+          title: `Return ${returnStatus}`,
+          details: `${existingItem.product.name} return status changed from ${existingItem.returnStatus} to ${returnStatus}`,
+          type: "RETURN",
+        },
+      });
+
+      const updatedOrder = await syncMainOrderStatusFromItems(
+        existingItem.orderId,
+        tx
+      );
+
+      return {
+        updatedItem,
+        updatedOrder,
+        oldReturnStatus: existingItem.returnStatus,
+      };
+    });
+
+    await createActivityLog({
+      userId: req.user.id,
+      action: "VENDOR_RETURN_STATUS_UPDATED",
+      entityType: "ORDER_ITEM",
+      entityId: result.updatedItem.id,
+      oldData: {
+        returnStatus: result.oldReturnStatus,
+      },
+      newData: {
+        returnStatus: result.updatedItem.returnStatus,
+        itemStatus: result.updatedItem.itemStatus,
+      },
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Return request ${returnStatus.toLowerCase()} successfully`,
+      item: result.updatedItem,
+      order: result.updatedOrder,
+    });
+  } catch (error) {
+    console.error("Vendor return update error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message:
+        error.message ||
+        "Failed to update return status",
+    });
+  }
+};
+export const updateOrderItemReturnByAdmin = async (
+  req,
+  res
+) => {
+  try {
+    const { itemId } = req.params;
+
+    const returnStatus = String(
+      req.body.returnStatus ||
+        req.body.status ||
+        ""
+    ).toUpperCase();
+
+    const allowedStatuses = [
+      "APPROVED",
+      "REJECTED",
+    ];
+
+    if (
+      !allowedStatuses.includes(
+        returnStatus
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Admin can only approve or reject a requested return",
+      });
+    }
+
+    const result =
+      await prisma.$transaction(
+        async (tx) => {
+          const existingItem =
+            await tx.orderItem.findUnique({
+              where: {
+                id: itemId,
+              },
+
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                  },
+                },
+              },
+            });
+
+          if (!existingItem) {
+            throw new Error(
+              "Order item not found"
+            );
+          }
+
+          if (
+            existingItem.returnStatus !==
+            "REQUESTED"
+          ) {
+            throw new Error(
+              `Return cannot be changed from ${existingItem.returnStatus} to ${returnStatus}`
+            );
+          }
+
+          const updatedItem =
+            await tx.orderItem.update({
+              where: {
+                id: itemId,
+              },
+
+              data: {
+                returnStatus,
+              },
+
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    images: true,
+                  },
+                },
+              },
+            });
+
+          await tx.orderTimeline.create({
+            data: {
+              orderId:
+                existingItem.orderId,
+
+              itemId:
+                existingItem.id,
+
+              userId:
+                req.user.id,
+
+              title: `Return ${returnStatus}`,
+
+              details: `${existingItem.product.name} return request ${returnStatus.toLowerCase()} by admin`,
+
+              type: "RETURN",
+            },
+          });
+
+          return {
+            updatedItem,
+            oldReturnStatus:
+              existingItem.returnStatus,
+          };
+        }
+      );
+
+    await createActivityLog({
+      userId: req.user.id,
+      action:
+        "ADMIN_RETURN_STATUS_UPDATED",
+      entityType: "ORDER_ITEM",
+      entityId:
+        result.updatedItem.id,
+
+      oldData: {
+        returnStatus:
+          result.oldReturnStatus,
+      },
+
+      newData: {
+        returnStatus:
+          result.updatedItem
+            .returnStatus,
+      },
+
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Return ${returnStatus.toLowerCase()} successfully`,
+      item: result.updatedItem,
+    });
+  } catch (error) {
+    console.error(
+      "Admin return update error:",
+      error
+    );
+
+    return res.status(400).json({
+      success: false,
+      message:
+        error.message ||
+        "Failed to update return request",
     });
   }
 };

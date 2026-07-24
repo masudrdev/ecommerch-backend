@@ -12,6 +12,10 @@ import { createOrder,
   updateVendorOrderItemStatus,
   getVendorOrderDetails,
   addVendorOrderNote,
+  updateOrderItemStatusByAdmin,
+  requestOrderItemReturnByCustomer,
+  updateOrderItemReturnByVendor,
+  updateOrderItemReturnByAdmin,
 
 } from "../controllers/order.controller.js";
 import { protect, allowRoles } from "../middlewares/auth.middleware.js";
@@ -44,6 +48,27 @@ router.get(
   allowRoles("VENDOR"),
   getVendorOrders
 );
+router.patch(
+  "/admin/items/:itemId/return-status",
+  protect,
+  allowRoles(
+    "ADMIN",
+    "SUPER_ADMIN"
+  ),
+  updateOrderItemReturnByAdmin
+);
+router.patch(
+  "/vendor/items/:itemId/return-status",
+  protect,
+  allowRoles("VENDOR"),
+  updateOrderItemReturnByVendor
+);
+router.patch(
+  "/customer/items/:itemId/return-request",
+  protect,
+  allowRoles("CUSTOMER"),
+  requestOrderItemReturnByCustomer
+);
 router.post(
   "/vendor/orders/:orderId/notes",
   protect,
@@ -55,6 +80,13 @@ router.get(
   protect,
   allowRoles("VENDOR"),
   getVendorOrderDetails
+);
+
+router.patch(
+  "/admin/items/:itemId/status",
+  protect,
+  allowRoles("ADMIN", "SUPER_ADMIN"),
+  updateOrderItemStatusByAdmin
 );
 router.patch(
   "/vendor/items/:itemId/status",
