@@ -14,6 +14,7 @@ import { createOrder,
   addVendorOrderNote,
   updateOrderItemStatusByAdmin,
   requestOrderItemReturnByCustomer,
+  cancelPendingOrderItemByCustomer,
   updateOrderItemReturnByVendor,
   updateOrderItemReturnByAdmin,
 
@@ -63,6 +64,13 @@ router.patch(
   allowRoles("VENDOR"),
   updateOrderItemReturnByVendor
 );
+router.patch(
+  "/customer/items/:itemId/cancel",
+  protect,
+  allowRoles("CUSTOMER"),
+  cancelPendingOrderItemByCustomer
+);
+
 router.patch(
   "/customer/items/:itemId/return-request",
   protect,

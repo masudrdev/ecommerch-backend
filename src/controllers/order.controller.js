@@ -680,6 +680,115 @@ export const cancelMyOrder = async (req, res) => {
     });
   }
 };
+
+export const cancelPendingOrderItemByCustomer = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const reason = String(req.body.reason || "").trim();
+
+    if (reason.length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Cancellation reason must be at least 5 characters",
+      });
+    }
+
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const item = await tx.orderItem.findUnique({
+          where: { id: itemId },
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+            order: {
+              select: {
+                id: true,
+                orderNumber: true,
+                userId: true,
+              },
+            },
+          },
+        });
+
+        if (!item || item.order.userId !== req.user.id) {
+          throw new Error("Order item not found for this customer");
+        }
+
+        if (String(item.itemStatus).toUpperCase() !== "PENDING") {
+          throw new Error("Only pending items can be cancelled");
+        }
+
+        const updatedItem = await tx.orderItem.update({
+          where: { id: itemId },
+          data: {
+            itemStatus: "CANCELLED",
+          },
+        });
+
+        await tx.orderTimeline.create({
+          data: {
+            orderId: item.orderId,
+            itemId: item.id,
+            userId: req.user.id,
+            title: "Item Cancelled by Customer",
+            details: `${item.product.name} cancelled by customer. Reason: ${reason}`,
+            type: "STATUS",
+          },
+        });
+
+        const updatedOrder = await syncMainOrderStatusFromItems(
+          item.orderId,
+          tx
+        );
+
+        return {
+          updatedItem,
+          updatedOrder,
+          orderNumber: item.order.orderNumber,
+        };
+      },
+      {
+        maxWait: 10000,
+        timeout: 20000,
+      }
+    );
+
+    await createActivityLog({
+      userId: req.user.id,
+      action: "CUSTOMER_ORDER_ITEM_CANCELLED",
+      entityType: "ORDER_ITEM",
+      entityId: result.updatedItem.id,
+      oldData: {
+        itemStatus: "PENDING",
+      },
+      newData: {
+        itemStatus: "CANCELLED",
+        orderStatus: result.updatedOrder.orderStatus,
+        reason,
+      },
+      req,
+    });
+
+    return res.json({
+      success: true,
+      message: "Pending item cancelled successfully",
+      item: result.updatedItem,
+      order: result.updatedOrder,
+    });
+  } catch (error) {
+    console.error("Customer pending item cancellation error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 export const updateOrderByAdmin = async (req, res) => {
   try {
     const { id } = req.params;
@@ -963,39 +1072,53 @@ export const getVendorOrders = async (req, res) => {
     const itemWhere = {
       vendorId: vendor.id,
 
-      ...(status !== "ALL"
-        ? {
-          itemStatus: status,
-        }
+      ...(status !== "ALL" && !status.startsWith("PARTIALLY_")
+        ? { itemStatus: status }
         : {}),
 
       ...(search
         ? {
-          OR: [
-            {
-              order: {
-                orderNumber: {
+            OR: [
+              {
+                order: {
+                  orderNumber: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                order: {
+                  customerName: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                order: {
+                  phone: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                product: {
+                  name: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                id: {
                   contains: search,
                   mode: "insensitive",
                 },
               },
-            },
-            {
-              product: {
-                name: {
-                  contains: search,
-                  mode: "insensitive",
-                },
-              },
-            },
-            {
-              id: {
-                contains: search,
-                mode: "insensitive",
-              },
-            },
-          ],
-        }
+            ],
+          }
         : {}),
     };
 
@@ -1019,6 +1142,15 @@ export const getVendorOrders = async (req, res) => {
             id: true,
             orderNumber: true,
             createdAt: true,
+            customerName: true,
+            phone: true,
+            paymentMethod: true,
+            paymentStatus: true,
+            user: {
+              select: {
+                email: true,
+              },
+            },
           },
         },
 
@@ -1047,6 +1179,15 @@ export const getVendorOrders = async (req, res) => {
           orderId,
           orderNumber: item.order.orderNumber,
           createdAt: item.order.createdAt,
+          customer: {
+            name: item.order.customerName,
+            phone: item.order.phone,
+            email: item.order.user?.email || null,
+          },
+          customerName: item.order.customerName,
+          phone: item.order.phone,
+          paymentMethod: item.order.paymentMethod,
+          paymentStatus: item.order.paymentStatus,
           items: [],
           vendorTotal: 0,
         });
@@ -1068,32 +1209,16 @@ export const getVendorOrders = async (req, res) => {
       orderGroup.vendorTotal += item.price * item.quantity;
     }
 
-    const groupedOrders = Array.from(groupedMap.values());
-
-    const getVendorStatus = (items) => {
-      const statuses = items.map((item) =>
-  item.itemStatus === "RESHIPPED"
-    ? "SHIPPED"
-    : item.itemStatus
-);
-
-      if (statuses.every((s) => s === "SHIPPED")) return "SHIPPED";
-      if (statuses.includes("SHIPPED")) return "PARTIALLY_SHIPPED";
-
-      if (statuses.every((s) => s === "PROCESSING")) return "PROCESSING";
-      if (statuses.includes("PROCESSING")) return "PARTIALLY_PROCESSING";
-
-      if (statuses.every((s) => s === "CONFIRMED")) return "CONFIRMED";
-      if (statuses.includes("CONFIRMED")) return "PARTIALLY_CONFIRMED";
-
-      return "PENDING";
-    };
-
-    const formattedOrders = groupedOrders.map((order) => ({
+    let formattedOrders = Array.from(groupedMap.values()).map((order) => ({
       orderId: order.orderId,
       orderNumber: order.orderNumber,
       createdAt: order.createdAt,
-      vendorStatus: getVendorStatus(order.items),
+      customer: order.customer,
+      customerName: order.customerName,
+      phone: order.phone,
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus,
+      vendorStatus: getVendorStatusFromItems(order.items),
       itemCount: order.items.length,
       vendorTotal: order.vendorTotal,
       image: order.items[0]?.product?.images?.[0]?.url || null,
@@ -1107,6 +1232,13 @@ export const getVendorOrders = async (req, res) => {
       })),
       items: order.items,
     }));
+
+    // PARTIALLY_* status is calculated after grouping, so filter it here.
+    if (status.startsWith("PARTIALLY_")) {
+      formattedOrders = formattedOrders.filter(
+        (order) => order.vendorStatus === status
+      );
+    }
 
     const totalOrders = formattedOrders.length;
     const paginatedOrders = formattedOrders.slice(skip, skip + limit);
@@ -1308,7 +1440,9 @@ export const updateVendorOrderItemStatus = async (req, res) => {
     const { itemStatus } = req.body;
 
     const vendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
     });
 
     if (!vendor) {
@@ -1318,235 +1452,284 @@ export const updateVendorOrderItemStatus = async (req, res) => {
       });
     }
 
-    const updatedItem = await prisma.$transaction(async (tx) => {
-      const item = await tx.orderItem.findFirst({
-        where: {
-          id: itemId,
-          vendorId: vendor.id,
-        },
-        include: {
-          product: true,
-        },
-      });
-
-      if (!item) {
-        throw new Error("Order item not found");
-      }
-
-      const forwardNextStatusMap = {
-        PENDING: "CONFIRMED",
-        CONFIRMED: "PROCESSING",
-        PROCESSING: "SHIPPED",
-      };
-
-      const canCancelFrom = ["CONFIRMED", "PROCESSING", "SHIPPED"];
-
-      if (itemStatus === "CANCELLED") {
-        if (!canCancelFrom.includes(item.itemStatus)) {
-          throw new Error(`You cannot cancel item from ${item.itemStatus}`);
-        }
-      } else {
-        const nextStatus = forwardNextStatusMap[item.itemStatus];
-
-        if (!nextStatus) {
-          throw new Error("Item status is locked");
-        }
-
-        if (itemStatus !== nextStatus) {
-          throw new Error(`You can only update ${item.itemStatus} to ${nextStatus}`);
-        }
-      }
-
-      // Stock decrease: PENDING -> CONFIRMED
-      if (itemStatus === "CONFIRMED" && !item.stockReduced) {
-        const variant = await tx.productVariant.findFirst({
+    const updatedItem = await prisma.$transaction(
+      async (tx) => {
+        const item = await tx.orderItem.findFirst({
           where: {
-            productId: item.productId,
-            size: item.size || null,
-            color: item.color || null,
+            id: itemId,
+            vendorId: vendor.id,
+          },
+          include: {
+            product: true,
           },
         });
 
-        if (variant) {
-          if (variant.stock < item.quantity) {
-            throw new Error(`${item.product.name} variant stock not available`);
-          }
-
-          await tx.productVariant.update({
-            where: { id: variant.id },
-            data: {
-              stock: {
-                decrement: item.quantity,
-              },
-            },
-          });
-
-
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              stock: {
-                decrement: item.quantity,
-              },
-            },
-          });
+        if (!item) {
+          throw new Error("Order item not found");
         }
 
-        else {
-          if (item.product.stock < item.quantity) {
-            throw new Error(`${item.product.name} stock not available`);
+        const forwardNextStatusMap = {
+          PENDING: "CONFIRMED",
+          CONFIRMED: "PROCESSING",
+          PROCESSING: "SHIPPED",
+        };
+
+        const canCancelFrom = [
+          "CONFIRMED",
+          "PROCESSING",
+          "SHIPPED",
+        ];
+
+        if (itemStatus === "CANCELLED") {
+          if (!canCancelFrom.includes(item.itemStatus)) {
+            throw new Error(
+              `You cannot cancel item from ${item.itemStatus}`
+            );
           }
-
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              stock: {
-                decrement: item.quantity,
-              },
-            },
-          });
-        }
-
-      }
-      if (itemStatus === "CONFIRMED" && !item.stockReduced) {
-  await tx.orderTimeline.create({
-    data: {
-      orderId: item.orderId,
-      itemId: item.id,
-      userId: req.user.id,
-      title: "Stock deducted",
-      details: `${item.quantity} quantity deducted for ${item.product.name}`,
-      type: "STOCK",
-    },
-  });
-}
-
-      // Stock return: CONFIRMED / PROCESSING / SHIPPED -> CANCELLED
-      if (itemStatus === "CANCELLED" && item.stockReduced) {
-        const variant = await tx.productVariant.findFirst({
-          where: {
-            productId: item.productId,
-            size: item.size || null,
-            color: item.color || null,
-          },
-        });
-
-        if (variant) {
-          await tx.productVariant.update({
-            where: { id: variant.id },
-            data: {
-              stock: {
-                increment: item.quantity,
-              },
-            },
-          });
-
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              stock: {
-                increment: item.quantity,
-              },
-            },
-          });
         } else {
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              stock: {
-                increment: item.quantity,
+          const nextStatus =
+            forwardNextStatusMap[item.itemStatus];
+
+          if (!nextStatus) {
+            throw new Error("Item status is locked");
+          }
+
+          if (itemStatus !== nextStatus) {
+            throw new Error(
+              `You can only update ${item.itemStatus} to ${nextStatus}`
+            );
+          }
+        }
+
+        // Stock decrease: PENDING -> CONFIRMED
+        if (
+          itemStatus === "CONFIRMED" &&
+          !item.stockReduced
+        ) {
+          const variant =
+            await tx.productVariant.findFirst({
+              where: {
+                productId: item.productId,
+                size: item.size || null,
+                color: item.color || null,
               },
+            });
+
+          if (variant) {
+            if (variant.stock < item.quantity) {
+              throw new Error(
+                `${item.product.name} variant stock not available`
+              );
+            }
+
+            await tx.productVariant.update({
+              where: {
+                id: variant.id,
+              },
+              data: {
+                stock: {
+                  decrement: item.quantity,
+                },
+              },
+            });
+
+            await tx.product.update({
+              where: {
+                id: item.productId,
+              },
+              data: {
+                stock: {
+                  decrement: item.quantity,
+                },
+              },
+            });
+          } else {
+            if (item.product.stock < item.quantity) {
+              throw new Error(
+                `${item.product.name} stock not available`
+              );
+            }
+
+            await tx.product.update({
+              where: {
+                id: item.productId,
+              },
+              data: {
+                stock: {
+                  decrement: item.quantity,
+                },
+              },
+            });
+          }
+
+          await tx.orderTimeline.create({
+            data: {
+              orderId: item.orderId,
+              itemId: item.id,
+              userId: req.user.id,
+              title: "Stock deducted",
+              details: `${item.quantity} quantity deducted for ${item.product.name}`,
+              type: "STOCK",
             },
           });
         }
+
+        // Stock return: CONFIRMED / PROCESSING / SHIPPED -> CANCELLED
+        if (
+          itemStatus === "CANCELLED" &&
+          item.stockReduced
+        ) {
+          const variant =
+            await tx.productVariant.findFirst({
+              where: {
+                productId: item.productId,
+                size: item.size || null,
+                color: item.color || null,
+              },
+            });
+
+          if (variant) {
+            await tx.productVariant.update({
+              where: {
+                id: variant.id,
+              },
+              data: {
+                stock: {
+                  increment: item.quantity,
+                },
+              },
+            });
+
+            await tx.product.update({
+              where: {
+                id: item.productId,
+              },
+              data: {
+                stock: {
+                  increment: item.quantity,
+                },
+              },
+            });
+          } else {
+            await tx.product.update({
+              where: {
+                id: item.productId,
+              },
+              data: {
+                stock: {
+                  increment: item.quantity,
+                },
+              },
+            });
+          }
+
+          await tx.orderTimeline.create({
+            data: {
+              orderId: item.orderId,
+              itemId: item.id,
+              userId: req.user.id,
+              title: "Stock returned",
+              details: `${item.quantity} quantity returned for ${item.product.name}`,
+              type: "STOCK",
+            },
+          });
+        }
+
+        const itemAfterUpdate =
+          await tx.orderItem.update({
+            where: {
+              id: item.id,
+            },
+            data: {
+              itemStatus,
+
+              stockReduced:
+                itemStatus === "CONFIRMED"
+                  ? true
+                  : itemStatus === "CANCELLED"
+                    ? false
+                    : item.stockReduced,
+            },
+          });
+
+        const timelineTitleMap = {
+          CONFIRMED: "Item Confirmed",
+          PROCESSING: "Processing Started",
+          SHIPPED: "Item Shipped",
+          CANCELLED: "Item Cancelled",
+        };
+
+        await tx.orderTimeline.create({
+          data: {
+            orderId: item.orderId,
+            itemId: item.id,
+            userId: req.user.id,
+            title:
+              timelineTitleMap[itemStatus] ||
+              "Item Status Updated",
+            details: `${item.product.name} changed from ${item.itemStatus} to ${itemStatus}`,
+            type: "STATUS",
+          },
+        });
+
+        await syncMainOrderStatusFromItems(
+          item.orderId,
+          tx
+        );
+
+        return {
+          oldItem: item,
+          newItem: itemAfterUpdate,
+        };
+      },
+      {
+        maxWait: 10000,
+        timeout: 30000,
       }
-
-      const itemAfterUpdate = await tx.orderItem.update({
-        where: { id: item.id },
-        data: {
-          itemStatus,
-          stockReduced:
-            itemStatus === "CONFIRMED"
-              ? true
-              : itemStatus === "CANCELLED"
-                ? false
-                : item.stockReduced,
-        },
-      });
-const timelineTitleMap = {
-  CONFIRMED: "Item Confirmed",
-  PROCESSING: "Processing Started",
-  SHIPPED: "Item Shipped",
-  CANCELLED: "Item Cancelled",
-};
-
-await tx.orderTimeline.create({
-  data: {
-    orderId: item.orderId,
-    itemId: item.id,
-    userId: req.user.id,
-    title: timelineTitleMap[itemStatus] || "Item Status Updated",
-    details: item.product.name,
-    type: "STATUS",
-  },
-});
-
-      return {
-        oldItem: item,
-        newItem: itemAfterUpdate,
-      };
-    });
-
-    await syncMainOrderStatusFromItems(updatedItem.newItem.orderId);
+    );
 
     await createActivityLog({
       userId: req.user.id,
       action: "VENDOR_ORDER_ITEM_STATUS_UPDATED",
       entityType: "ORDER_ITEM",
       entityId: updatedItem.newItem.id,
+
       oldData: {
         itemStatus: updatedItem.oldItem.itemStatus,
-        stockReduced: updatedItem.oldItem.stockReduced,
+        stockReduced:
+          updatedItem.oldItem.stockReduced,
       },
+
       newData: {
         itemStatus: updatedItem.newItem.itemStatus,
-        stockReduced: updatedItem.newItem.stockReduced,
+        stockReduced:
+          updatedItem.newItem.stockReduced,
       },
+
       req,
     });
 
     return res.json({
       success: true,
-      message: "Order item status updated successfully",
+      message:
+        "Order item status updated successfully",
       item: updatedItem.newItem,
     });
   } catch (error) {
-    console.error("Vendor order item status update error:", error);
+    console.error(
+      "Vendor order item status update error:",
+      error
+    );
+
     return res.status(400).json({
       success: false,
-      message: error.message,
+      message:
+        error.message ||
+        "Failed to update order item status",
     });
   }
-
 };
-// const getVendorStatusFromItems = (items) => {
-//   const statuses = items.map((item) =>
-//   item.itemStatus === "RESHIPPED"
-//     ? "SHIPPED"
-//     : item.itemStatus
-// );
 
-//   if (statuses.every((s) => s === "SHIPPED")) return "SHIPPED";
-//   if (statuses.includes("SHIPPED")) return "PARTIALLY_SHIPPED";
-
-//   if (statuses.every((s) => s === "PROCESSING")) return "PROCESSING";
-//   if (statuses.includes("PROCESSING")) return "PARTIALLY_PROCESSING";
-
-//   if (statuses.every((s) => s === "CONFIRMED")) return "CONFIRMED";
-//   if (statuses.includes("CONFIRMED")) return "PARTIALLY_CONFIRMED";
-
-//   return "PENDING";
-// };
 const getVendorStatusFromItems = (
   items = []
 ) => {
@@ -1882,6 +2065,13 @@ export const updateOrderItemStatusByAdmin = async (req, res) => {
       req.body.itemStatus || req.body.status || ""
     ).toUpperCase();
 
+    const cancellationReason = String(
+      req.body.cancellationReason ||
+        req.body.cancelReason ||
+        req.body.reason ||
+        ""
+    ).trim();
+
     const allowedStatuses = [
       "CONFIRMED",
       "PROCESSING",
@@ -1902,6 +2092,17 @@ export const updateOrderItemStatusByAdmin = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Invalid item status",
+      });
+    }
+
+    if (
+      itemStatus === "CANCELLED" &&
+      cancellationReason.length < 5
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Cancellation reason must be at least 5 characters",
       });
     }
 
@@ -1995,9 +2196,18 @@ data: {
           orderId: existingItem.orderId,
           itemId: existingItem.id,
           userId: req.user.id,
-          title: `Item ${itemStatus}`,
-          details: `${existingItem.product.name} changed from ${existingItem.itemStatus} to ${itemStatus}`,
-          type: "STATUS",
+          title:
+            itemStatus === "CANCELLED"
+              ? "Item Cancelled by Admin"
+              : `Item ${itemStatus}`,
+          details:
+            itemStatus === "CANCELLED"
+              ? `${existingItem.product.name} changed from ${existingItem.itemStatus} to CANCELLED. Reason: ${cancellationReason}`
+              : `${existingItem.product.name} changed from ${existingItem.itemStatus} to ${itemStatus}`,
+          type:
+            itemStatus === "CANCELLED"
+              ? "CANCELLED"
+              : "STATUS",
         },
       });
 
@@ -2012,6 +2222,10 @@ data: {
         updatedOrder,
         oldStatus: existingItem.itemStatus,
       };
+    },
+    {
+      maxWait: 10000,
+      timeout: 20000,
     });
 
     await createActivityLog({
@@ -2025,6 +2239,9 @@ data: {
       newData: {
         itemStatus: result.updatedItem.itemStatus,
         orderStatus: result.updatedOrder.orderStatus,
+        ...(itemStatus === "CANCELLED"
+          ? { cancellationReason }
+          : {}),
       },
       req,
     });
