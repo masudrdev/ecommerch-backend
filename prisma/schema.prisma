@@ -254,6 +254,8 @@ model OrderItem {
   price             Float
   size              String?
   color             String?
+  deliveryCharge    Float           @default(0)
+  shippedAt         DateTime?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @default(now()) @updatedAt
   stockReduced      Boolean         @default(false)

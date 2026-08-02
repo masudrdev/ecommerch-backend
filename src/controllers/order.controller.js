@@ -4,6 +4,175 @@ import createNotification from "../utils/createNotification.js";
 const generateOrderNumber = () => {
   return "FB-" + Date.now();
 };
+const calculateCommissionSnapshot = ({
+  price,
+  quantity,
+  commissionType,
+  commissionValue,
+}) => {
+  const safePrice = Number(price || 0);
+  const safeQuantity = Math.max(Number(quantity || 1), 1);
+  const subtotal = safePrice * safeQuantity;
+
+  const type = commissionType || "PERCENTAGE";
+  const value = Math.max(Number(commissionValue || 0), 0);
+
+  let commissionAmount = 0;
+
+  if (type === "PERCENTAGE") {
+    commissionAmount = (subtotal * value) / 100;
+  } else if (type === "FIXED") {
+    // Fixed commission is applied once per order-item line,
+    // not multiplied by quantity.
+    commissionAmount = value;
+  }
+
+  // Commission cannot be greater than the item subtotal.
+  commissionAmount = Math.min(
+    Math.max(commissionAmount, 0),
+    subtotal
+  );
+
+  const vendorEarning = subtotal - commissionAmount;
+
+  return {
+    subtotal,
+    commissionType: type,
+    commissionValue: value,
+    commissionAmount,
+    platformEarning: commissionAmount,
+    vendorEarning,
+  };
+};
+const isDhakaDistrict = (district) => {
+  const normalizedDistrict = String(
+    district || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return [
+    "dhaka",
+    "ঢাকা",
+    "dhaka district",
+  ].includes(normalizedDistrict);
+};
+
+
+const calculateOrderFinancials = (items = []) => {
+  if (!Array.isArray(items)) {
+    return {
+      productTotal: 0,
+      deliveryFee: 0,
+      grandTotal: 0,
+      totalCommission: 0,
+      totalPlatformEarning: 0,
+      totalVendorEarning: 0,
+    };
+  }
+
+  const financials = items.reduce(
+    (result, item) => {
+      const itemStatus = String(
+        item?.itemStatus || "PENDING"
+      ).toUpperCase();
+
+      const isCancelled =
+        itemStatus === "CANCELLED";
+
+      const price = Number(
+        item?.price || 0
+      );
+
+      const quantity = Math.max(
+        Number(item?.quantity || 0),
+        0
+      );
+
+      const subtotal =
+        price * quantity;
+
+      /*
+       * Product থেকে order তৈরির সময় save করা
+       * historical delivery charge snapshot।
+       */
+      const itemDeliveryCharge = Number(
+        item?.deliveryCharge || 0
+      );
+
+      /*
+       * shippedAt থাকলে বুঝবো item একবার shipment-এ
+       * চলে গিয়েছিল।
+       *
+       * পরে status CANCELLED হলেও delivery cost থাকবে।
+       */
+      const wasShipped =
+        Boolean(item?.shippedAt);
+
+      const commissionAmount = Number(
+        item?.platformEarning ??
+          item?.commissionAmount ??
+          0
+      );
+
+      const vendorEarning = Number(
+        item?.vendorEarning ??
+          Math.max(
+            subtotal - commissionAmount,
+            0
+          )
+      );
+
+      /*
+       * Cancelled item-এর product value,
+       * commission এবং vendor earning বাদ।
+       */
+      if (!isCancelled) {
+        result.productTotal +=
+          subtotal;
+
+        result.totalCommission +=
+          commissionAmount;
+
+        result.totalPlatformEarning +=
+          commissionAmount;
+
+        result.totalVendorEarning +=
+          vendorEarning;
+      }
+
+      /*
+       * Active item হলে delivery charge থাকবে।
+       *
+       * Cancelled item হলেও shipment-এর পরে cancel
+       * হয়ে থাকলে delivery charge থাকবে।
+       */
+      const deliveryApplicable =
+        !isCancelled || wasShipped;
+
+      if (deliveryApplicable) {
+        result.deliveryFee +=
+          itemDeliveryCharge;
+      }
+
+      return result;
+    },
+    {
+      productTotal: 0,
+      deliveryFee: 0,
+      grandTotal: 0,
+      totalCommission: 0,
+      totalPlatformEarning: 0,
+      totalVendorEarning: 0,
+    }
+  );
+
+  financials.grandTotal =
+    financials.productTotal +
+    financials.deliveryFee;
+
+  return financials;
+};
 
 export const createOrder = async (req, res) => {
   try {
@@ -14,11 +183,12 @@ export const createOrder = async (req, res) => {
       address,
       district,
       upazila,
-      deliveryFee = 0,
     } = req.body;
 
     const orderUserId =
-      req.user.role === "CUSTOMER" ? req.user.id : customerId;
+      req.user.role === "CUSTOMER"
+        ? req.user.id
+        : customerId;
 
     if (!orderUserId) {
       return res.status(400).json({
@@ -27,137 +197,421 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    const customer = await prisma.user.findUnique({
-      where: { id: orderUserId },
-    });
+    if (!customerName) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer name is required",
+      });
+    }
 
-    if (!customer || customer.role !== "CUSTOMER") {
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number is required",
+      });
+    }
+
+    if (!address) {
+      return res.status(400).json({
+        success: false,
+        message: "Address is required",
+      });
+    }
+
+    if (!district) {
+      return res.status(400).json({
+        success: false,
+        message: "District is required",
+      });
+    }
+
+    const customer =
+      await prisma.user.findUnique({
+        where: {
+          id: orderUserId,
+        },
+      });
+
+    if (
+      !customer ||
+      customer.role !== "CUSTOMER"
+    ) {
       return res.status(400).json({
         success: false,
         message: "Valid customer not found",
       });
     }
 
-    const cart = await prisma.cart.findUnique({
-      where: { userId: orderUserId },
-      include: {
-        items: {
-          include: {
-            product: {
-              include: { vendor: true },
+    const cart =
+      await prisma.cart.findUnique({
+        where: {
+          userId: orderUserId,
+        },
+
+        include: {
+          items: {
+            include: {
+              product: {
+                include: {
+                  vendor: true,
+                },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    if (!cart || cart.items.length === 0) {
+    if (
+      !cart ||
+      cart.items.length === 0
+    ) {
       return res.status(400).json({
         success: false,
         message: "Cart is empty",
       });
     }
 
-    let totalAmount = 0;
+    /*
+     * Dhaka হলে Product.deliveryCharge।
+     * Dhaka-এর বাইরে হলে:
+     *
+     * Product.deliveryCharge
+     * + Product.outsideDistrictExtraCharge
+     */
+    const outsideDhaka =
+      !isDhakaDistrict(district);
 
-    for (const item of cart.items) {
-      if (item.product.status !== "APPROVED") {
+    let productTotal = 0;
+    let totalDeliveryFee = 0;
+
+    /*
+     * আগে সব item prepare করবো।
+     * তারপর transaction-এর ভিতরে order create করবো।
+     */
+    const preparedOrderItems = [];
+
+    for (const cartItem of cart.items) {
+      const product =
+        cartItem.product;
+
+      if (
+        product.status !== "APPROVED"
+      ) {
         return res.status(400).json({
           success: false,
-          message: `${item.product.name} is not available`,
+          message: `${product.name} is not available`,
         });
       }
 
-      if (item.product.stock < item.quantity) {
+      if (
+        product.stock <
+        cartItem.quantity
+      ) {
         return res.status(400).json({
           success: false,
-          message: `${item.product.name} stock not available`,
+          message: `${product.name} stock not available`,
         });
       }
 
-      const price = item.product.salePrice || item.product.price;
-      totalAmount += price * item.quantity;
+      if (
+        !product.commissionType ||
+        product.commissionValue ===
+          null ||
+        product.commissionValue ===
+          undefined
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: `${product.name} does not have an approved commission`,
+        });
+      }
+
+      /*
+       * salePrice থাকলে salePrice,
+       * না থাকলে regular price।
+       */
+      const price = Number(
+        product.salePrice ??
+          product.price ??
+          0
+      );
+
+      const quantity = Number(
+        cartItem.quantity || 0
+      );
+
+      const subtotal =
+        price * quantity;
+
+      /*
+       * Delivery charge প্রতি OrderItem line-এ
+       * একবার যোগ হবে।
+       *
+       * quantity 3 হলেও delivery charge
+       * 3 দিয়ে multiply হবে না।
+       */
+      const baseDeliveryCharge =
+        Number(
+          product.deliveryCharge || 0
+        );
+
+      const outsideDistrictCharge =
+        outsideDhaka
+          ? Number(
+              product.outsideDistrictExtraCharge ||
+                0
+            )
+          : 0;
+
+      const itemDeliveryCharge =
+        baseDeliveryCharge +
+        outsideDistrictCharge;
+
+      const commission =
+        calculateCommissionSnapshot({
+          price,
+          quantity,
+
+          commissionType:
+            product.commissionType,
+
+          commissionValue:
+            product.commissionValue,
+        });
+
+      productTotal += subtotal;
+
+      totalDeliveryFee +=
+        itemDeliveryCharge;
+
+      preparedOrderItems.push({
+        productId:
+          cartItem.productId,
+
+        vendorId:
+          product.vendorId,
+
+        quantity,
+        price,
+
+        size:
+          cartItem.size,
+
+        color:
+          cartItem.color,
+
+        /*
+         * Product থেকে delivery charge snapshot।
+         */
+        deliveryCharge:
+          itemDeliveryCharge,
+
+        /*
+         * Order তৈরি হওয়ার সময় এখনো ship হয়নি।
+         */
+        shippedAt: null,
+
+        commissionType:
+          commission.commissionType,
+
+        commissionValue:
+          commission.commissionValue,
+
+        commissionAmount:
+          commission.commissionAmount,
+
+        platformEarning:
+          commission.platformEarning,
+
+        vendorEarning:
+          commission.vendorEarning,
+      });
     }
 
-    const grandTotal = totalAmount + deliveryFee;
+    /*
+     * Order Grand Total:
+     *
+     * সব item product subtotal
+     * + সব item delivery charge
+     */
+    const grandTotal =
+      productTotal +
+      totalDeliveryFee;
 
-    const order = await prisma.$transaction(async (tx) => {
-      const newOrder = await tx.order.create({
-        data: {
-          orderNumber: generateOrderNumber(),
-          userId: orderUserId,
-          createdById: req.user.id,
-          createdByRole: req.user.role,
-          source:
-            req.user.role === "CUSTOMER"
-              ? "CUSTOMER"
-              : `${req.user.role}_MANUAL`,
+    const order =
+      await prisma.$transaction(
+        async (tx) => {
+          const newOrder =
+            await tx.order.create({
+              data: {
+                orderNumber:
+                  generateOrderNumber(),
 
-          totalAmount: grandTotal,
-          deliveryFee,
-          paymentMethod: "COD",
-          paymentStatus: "UNPAID",
-          orderStatus: "PENDING",
+                userId:
+                  orderUserId,
 
-          customerName,
-          phone,
-          address,
-          district,
-          upazila,
+                createdById:
+                  req.user.id,
 
-          items: {
-            create: cart.items.map((item) => ({
-              productId: item.productId,
-              vendorId: item.product.vendorId,
-              quantity: item.quantity,
-              price: item.product.salePrice || item.product.price,
-              size: item.size,
-              color: item.color,
-            })),
-          },
-        },
-        include: {
-          items: true,
-        },
-      });
+                createdByRole:
+                  req.user.role,
 
+                source:
+                  req.user.role ===
+                  "CUSTOMER"
+                    ? "CUSTOMER"
+                    : `${req.user.role}_MANUAL`,
 
+                /*
+                 * Order.deliveryFee হলো
+                 * সব item delivery charge-এর total।
+                 */
+                deliveryFee:
+                  totalDeliveryFee,
 
-      await tx.cartItem.deleteMany({
-        where: { cartId: cart.id },
-      });
+                /*
+                 * totalAmount হলো Grand Total।
+                 */
+                totalAmount:
+                  grandTotal,
 
-      return newOrder;
-    });
+                paymentMethod:
+                  "COD",
+
+                paymentStatus:
+                  "UNPAID",
+
+                orderStatus:
+                  "PENDING",
+
+                customerName,
+                phone,
+                address,
+                district,
+                upazila,
+
+                items: {
+                  create:
+                    preparedOrderItems,
+                },
+              },
+
+              include: {
+                items: {
+                  include: {
+                    product: {
+                      select: {
+                        id: true,
+                        name: true,
+                        slug: true,
+
+                        images: {
+                          where: {
+                            isMain: true,
+                          },
+
+                          select: {
+                            url: true,
+                          },
+
+                          take: 1,
+                        },
+                      },
+                    },
+
+                    vendor: {
+                      select: {
+                        id: true,
+                        shopName: true,
+                        shopSlug: true,
+                      },
+                    },
+                  },
+                },
+              },
+            });
+
+          await tx.cartItem.deleteMany({
+            where: {
+              cartId: cart.id,
+            },
+          });
+
+          return newOrder;
+        }
+      );
+
     await createNotification({
       userId: order.userId,
+
       title: "Order Created",
+
       message: `Your order ${order.orderNumber} has been placed successfully.`,
+
       type: "ORDER_CREATED",
+
       link: `/customer/orders/${order.id}`,
     });
+
     await createActivityLog({
       userId: req.user.id,
+
       action: "ORDER_CREATED",
+
       entityType: "ORDER",
+
       entityId: order.id,
+
       oldData: null,
+
       newData: {
-        orderNumber: order.orderNumber,
-        totalAmount: order.totalAmount,
-        source: order.source,
+        orderNumber:
+          order.orderNumber,
+
+        productTotal,
+
+        deliveryFee:
+          order.deliveryFee,
+
+        totalAmount:
+          order.totalAmount,
+
+        source:
+          order.source,
       },
+
       req,
     });
-    res.status(201).json({
+
+    return res.status(201).json({
       success: true,
-      message: "Order created successfully",
-      order,
+      message:
+        "Order created successfully",
+
+      order: {
+        ...order,
+
+        /*
+         * Frontend ও Postman-এর সুবিধার জন্য।
+         */
+        productTotal,
+        deliveryFee:
+          totalDeliveryFee,
+        grandTotal,
+      },
     });
   } catch (error) {
-    res.status(400).json({
+    console.error(
+      "Create order error:",
+      error
+    );
+
+    return res.status(400).json({
       success: false,
-      message: error.message,
+
+      message:
+        error.message ||
+        "Order creation failed",
     });
   }
 };
@@ -340,32 +794,113 @@ export const getOrderDetails = async (req, res) => {
 
 export const getAllOrdersForAdmin = async (req, res) => {
   try {
-    const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 10;
+    const page = Math.max(Number(req.query.page) || 1, 1);
+
+    const limit = Math.min(
+      Math.max(Number(req.query.limit) || 10, 1),
+      100
+    );
+
     const skip = (page - 1) * limit;
 
-    const search = req.query.search?.trim() || "";
-    const status = req.query.status?.trim() || "";
-    const paymentStatus = req.query.paymentStatus?.trim() || "";
-    const sort = req.query.sort === "oldest" ? "asc" : "desc";
+    const search = String(
+      req.query.search || ""
+    ).trim();
 
+    const status = String(
+      req.query.status || ""
+    )
+      .trim()
+      .toUpperCase();
+
+    const paymentStatus = String(
+      req.query.paymentStatus || ""
+    )
+      .trim()
+      .toUpperCase();
+
+    const sort =
+      String(req.query.sort || "").toLowerCase() ===
+      "oldest"
+        ? "asc"
+        : "desc";
+
+    /*
+     * এই where শুধু table search/filter-এর জন্য।
+     * উপরের lifetime cards এই filter দ্বারা বদলাবে না।
+     */
     const where = {
-      ...(status ? { orderStatus: status } : {}),
-      ...(paymentStatus ? { paymentStatus } : {}),
+      ...(status
+        ? {
+            orderStatus: status,
+          }
+        : {}),
+
+      ...(paymentStatus
+        ? {
+            paymentStatus,
+          }
+        : {}),
+
       ...(search
         ? {
             OR: [
-              { orderNumber: { contains: search, mode: "insensitive" } },
-              { customerName: { contains: search, mode: "insensitive" } },
-              { phone: { contains: search, mode: "insensitive" } },
               {
-                user: {
-                  name: { contains: search, mode: "insensitive" },
+                orderNumber: {
+                  contains: search,
+                  mode: "insensitive",
+                },
+              },
+              {
+                customerName: {
+                  contains: search,
+                  mode: "insensitive",
+                },
+              },
+              {
+                phone: {
+                  contains: search,
+                  mode: "insensitive",
                 },
               },
               {
                 user: {
-                  email: { contains: search, mode: "insensitive" },
+                  name: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                user: {
+                  email: {
+                    contains: search,
+                    mode: "insensitive",
+                  },
+                },
+              },
+              {
+                items: {
+                  some: {
+                    product: {
+                      name: {
+                        contains: search,
+                        mode: "insensitive",
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                items: {
+                  some: {
+                    vendor: {
+                      shopName: {
+                        contains: search,
+                        mode: "insensitive",
+                      },
+                    },
+                  },
                 },
               },
             ],
@@ -373,11 +908,20 @@ export const getAllOrdersForAdmin = async (req, res) => {
         : {}),
     };
 
-    const [orders, totalOrders] = await Promise.all([
+    const [
+      orders,
+      filteredTotalOrders,
+      lifetimeTotalOrders,
+      lifetimeFinancialItems,
+    ] = await Promise.all([
+      /*
+       * Paginated table orders
+       */
       prisma.order.findMany({
         where,
         skip,
         take: limit,
+
         include: {
           user: {
             select: {
@@ -387,6 +931,7 @@ export const getAllOrdersForAdmin = async (req, res) => {
               phone: true,
             },
           },
+
           createdBy: {
             select: {
               id: true,
@@ -394,6 +939,7 @@ export const getAllOrdersForAdmin = async (req, res) => {
               role: true,
             },
           },
+
           items: {
             include: {
               product: {
@@ -401,13 +947,19 @@ export const getAllOrdersForAdmin = async (req, res) => {
                   id: true,
                   name: true,
                   slug: true,
+
                   images: {
-                    where: { isMain: true },
-                    select: { url: true },
+                    where: {
+                      isMain: true,
+                    },
+                    select: {
+                      url: true,
+                    },
                     take: 1,
                   },
                 },
               },
+
               vendor: {
                 select: {
                   id: true,
@@ -418,31 +970,299 @@ export const getAllOrdersForAdmin = async (req, res) => {
             },
           },
         },
+
         orderBy: {
           createdAt: sort,
         },
       }),
 
-      prisma.order.count({ where }),
+      /*
+       * Search/filter অনুযায়ী table total
+       */
+      prisma.order.count({
+        where,
+      }),
+
+      /*
+       * Lifetime Total Orders card
+       */
+      prisma.order.count(),
+
+      /*
+       * Lifetime financial stats।
+       * Cancelled item বাদ থাকবে।
+       */
+      prisma.orderItem.findMany({
+        where: {
+          itemStatus: {
+            not: "CANCELLED",
+          },
+        },
+
+        select: {
+          price: true,
+          quantity: true,
+          commissionAmount: true,
+          platformEarning: true,
+          vendorEarning: true,
+        },
+      }),
     ]);
 
-    res.json({
+    /*
+     * Admin lifetime financial cards
+     */
+    const lifetimeStats =
+      lifetimeFinancialItems.reduce(
+        (result, item) => {
+          const price = Number(item.price || 0);
+          const quantity = Number(
+            item.quantity || 0
+          );
+
+          const subtotal = price * quantity;
+
+          const commission = Number(
+            item.platformEarning ??
+              item.commissionAmount ??
+              0
+          );
+
+          /*
+           * পুরোনো order-এ vendorEarning null হলে:
+           * subtotal - commission fallback হবে।
+           */
+          const vendorEarning = Number(
+            item.vendorEarning ??
+              Math.max(
+                subtotal - commission,
+                0
+              )
+          );
+
+          result.grossProductSales +=
+            subtotal;
+
+          result.totalCommission +=
+            commission;
+
+          result.totalVendorEarnings +=
+            vendorEarning;
+
+          return result;
+        },
+        {
+          grossProductSales: 0,
+          totalCommission: 0,
+          totalVendorEarnings: 0,
+        }
+      );
+
+    /*
+     * প্রতিটি table order-এর financial summary
+     */
+    const formattedOrders = orders.map(
+      (order) => {
+        const activeItems =
+          order.items.filter(
+            (item) =>
+              String(
+                item.itemStatus || ""
+              ).toUpperCase() !==
+              "CANCELLED"
+          );
+
+        const financialSummary =
+          activeItems.reduce(
+            (result, item) => {
+              const price = Number(
+                item.price || 0
+              );
+
+              const quantity = Number(
+                item.quantity || 0
+              );
+
+              const subtotal =
+                price * quantity;
+
+              const commission = Number(
+                item.platformEarning ??
+                  item.commissionAmount ??
+                  0
+              );
+
+              const vendorEarning =
+                Number(
+                  item.vendorEarning ??
+                    Math.max(
+                      subtotal -
+                        commission,
+                      0
+                    )
+                );
+
+              result.productTotal +=
+                subtotal;
+
+              result.totalCommission +=
+                commission;
+
+              result.totalVendorEarning +=
+                vendorEarning;
+
+              return result;
+            },
+            {
+              productTotal: 0,
+              totalCommission: 0,
+              totalVendorEarning: 0,
+            }
+          );
+
+        const formattedItems =
+          order.items.map((item) => {
+            const price = Number(
+              item.price || 0
+            );
+
+            const quantity = Number(
+              item.quantity || 0
+            );
+
+            const subtotal =
+              price * quantity;
+
+            const commissionAmount =
+              Number(
+                item.commissionAmount ??
+                  item.platformEarning ??
+                  0
+              );
+
+            const platformEarning =
+              Number(
+                item.platformEarning ??
+                  item.commissionAmount ??
+                  0
+              );
+
+            const vendorEarning =
+              Number(
+                item.vendorEarning ??
+                  Math.max(
+                    subtotal -
+                      platformEarning,
+                    0
+                  )
+              );
+
+            return {
+              ...item,
+
+              price,
+              quantity,
+              subtotal,
+
+              commissionValue: Number(
+                item.commissionValue || 0
+              ),
+
+              commissionAmount,
+              platformEarning,
+              vendorEarning,
+
+              financialEligible:
+                String(
+                  item.itemStatus || ""
+                ).toUpperCase() !==
+                "CANCELLED",
+            };
+          });
+
+        return {
+          ...order,
+
+          /*
+           * Admin table fields
+           */
+          productTotal:
+            financialSummary.productTotal,
+
+          totalCommission:
+            financialSummary.totalCommission,
+
+          totalVendorEarning:
+            financialSummary.totalVendorEarning,
+
+          /*
+           * Compatibility alias
+           */
+          vendorEarning:
+            financialSummary.totalVendorEarning,
+
+          itemCount: order.items.length,
+
+          image:
+            order.items[0]?.product
+              ?.images?.[0]?.url ||
+            null,
+
+          items: formattedItems,
+        };
+      }
+    );
+
+    return res.status(200).json({
       success: true,
-      orders,
+
+      orders: formattedOrders,
+
+      /*
+       * Lifetime admin cards।
+       * Search/filter/pagination এগুলো বদলাবে না।
+       */
+      stats: {
+        totalOrders:
+          lifetimeTotalOrders,
+
+        grossProductSales:
+          lifetimeStats.grossProductSales,
+
+        totalCommission:
+          lifetimeStats.totalCommission,
+
+        totalVendorEarnings:
+          lifetimeStats.totalVendorEarnings,
+      },
+
       pagination: {
-        total: totalOrders,
+        total: filteredTotalOrders,
         page,
         limit,
-        totalPages: Math.ceil(totalOrders / limit),
+        totalPages: Math.max(
+          Math.ceil(
+            filteredTotalOrders / limit
+          ),
+          1
+        ),
       },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error(
+      "Get admin orders error:",
+      error
+    );
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message:
+        error.message ||
+        "Failed to get admin orders",
     });
   }
 };
+
 const validateOrderPaymentStatus = (orderStatus, paymentStatus) => {
   if (["DELIVERED", "COMPLETED"].includes(orderStatus) && paymentStatus !== "PAID") {
     return "Delivered/Completed order must be PAID";
@@ -966,18 +1786,51 @@ export const createManualOrder = async (req, res) => {
         });
       }
 
-      const price = product.salePrice || product.price;
+const price =
+  product.salePrice || product.price;
 
-      totalAmount += price * item.quantity;
+if (
+  !product.commissionType ||
+  product.commissionValue === null ||
+  product.commissionValue === undefined
+) {
+  return res.status(400).json({
+    success: false,
+    message: `${product.name} does not have an approved commission`,
+  });
+}
 
-      orderItems.push({
-        productId: product.id,
-        vendorId: product.vendorId,
-        quantity: item.quantity,
-        price,
-        size: item.size,
-        color: item.color,
-      });
+const commission =
+  calculateCommissionSnapshot({
+    price,
+    quantity: item.quantity,
+    commissionType:
+      product.commissionType,
+    commissionValue:
+      product.commissionValue,
+  });
+
+totalAmount += commission.subtotal;
+
+orderItems.push({
+  productId: product.id,
+  vendorId: product.vendorId,
+  quantity: item.quantity,
+  price,
+  size: item.size,
+  color: item.color,
+
+  commissionType:
+    commission.commissionType,
+  commissionValue:
+    commission.commissionValue,
+  commissionAmount:
+    commission.commissionAmount,
+  platformEarning:
+    commission.platformEarning,
+  vendorEarning:
+    commission.vendorEarning,
+});
     }
 
     const grandTotal = totalAmount + deliveryFee;
@@ -1052,7 +1905,13 @@ export const createManualOrder = async (req, res) => {
 export const getVendorOrders = async (req, res) => {
   try {
     const vendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
+      select: {
+        id: true,
+        shopName: true,
+      },
     });
 
     if (!vendor) {
@@ -1062,19 +1921,43 @@ export const getVendorOrders = async (req, res) => {
       });
     }
 
-    const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 10;
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(
+      Math.max(Number(req.query.limit) || 10, 1),
+      100
+    );
     const skip = (page - 1) * limit;
 
-    const search = req.query.search?.trim() || "";
-    const status = req.query.status?.trim() || "ALL";
+    const search = String(req.query.search || "").trim();
 
+    const requestedStatus = String(
+      req.query.status || "ALL"
+    )
+      .trim()
+      .toUpperCase();
+
+    const status = requestedStatus || "ALL";
+
+    const sort =
+      String(req.query.sort || "").toLowerCase() === "oldest"
+        ? "asc"
+        : "desc";
+
+    /*
+     * Search/filter শুধু table-এর data পরিবর্তন করবে।
+     * Lifetime stats এই where ব্যবহার করবে না।
+     */
     const itemWhere = {
       vendorId: vendor.id,
 
-      ...(status !== "ALL" && !status.startsWith("PARTIALLY_")
-        ? { itemStatus: status }
-        : {}),
+      ...(
+        status !== "ALL" &&
+        !status.startsWith("PARTIALLY_")
+          ? {
+              itemStatus: status,
+            }
+          : {}
+      ),
 
       ...(search
         ? {
@@ -1122,52 +2005,119 @@ export const getVendorOrders = async (req, res) => {
         : {}),
     };
 
-    const allVendorItems = await prisma.orderItem.findMany({
-      where: itemWhere,
-      orderBy: {
-        order: {
-          createdAt: "desc",
-        },
-      },
-      select: {
-        id: true,
-        itemStatus: true,
-        quantity: true,
-        price: true,
-        size: true,
-        color: true,
+    /*
+     * Table data এবং lifetime card stats parallel-এ load হবে।
+     *
+     * completedEarnings:
+     * শুধু COMPLETED item-এর vendorEarning।
+     *
+     * totalCommission:
+     * সব non-cancelled item-এর platformEarning।
+     *
+     * lifetimeTotalOrders:
+     * logged-in vendor-এর unique order count।
+     */
+    const [
+      allVendorItems,
+      completedEarningsResult,
+      totalCommissionResult,
+      lifetimeVendorOrders,
+    ] = await Promise.all([
+      prisma.orderItem.findMany({
+        where: itemWhere,
 
-        order: {
-          select: {
-            id: true,
-            orderNumber: true,
-            createdAt: true,
-            customerName: true,
-            phone: true,
-            paymentMethod: true,
-            paymentStatus: true,
-            user: {
-              select: {
-                email: true,
+        orderBy: {
+          order: {
+            createdAt: sort,
+          },
+        },
+
+        select: {
+          id: true,
+          orderId: true,
+          itemStatus: true,
+
+          quantity: true,
+          price: true,
+          size: true,
+          color: true,
+
+          commissionType: true,
+          commissionValue: true,
+          commissionAmount: true,
+          platformEarning: true,
+          vendorEarning: true,
+
+          order: {
+            select: {
+              id: true,
+              orderNumber: true,
+              createdAt: true,
+              customerName: true,
+              phone: true,
+              paymentMethod: true,
+              paymentStatus: true,
+
+              user: {
+                select: {
+                  email: true,
+                },
+              },
+            },
+          },
+
+          product: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+
+              images: {
+                where: {
+                  isMain: true,
+                },
+                select: {
+                  url: true,
+                },
+                take: 1,
               },
             },
           },
         },
+      }),
 
-        product: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            images: {
-              where: { isMain: true },
-              select: { url: true },
-              take: 1,
-            },
+      prisma.orderItem.aggregate({
+        where: {
+          vendorId: vendor.id,
+          itemStatus: "COMPLETED",
+        },
+        _sum: {
+          vendorEarning: true,
+        },
+      }),
+
+      prisma.orderItem.aggregate({
+        where: {
+          vendorId: vendor.id,
+          itemStatus: {
+            not: "CANCELLED",
           },
         },
-      },
-    });
+        _sum: {
+          platformEarning: true,
+        },
+      }),
+
+      prisma.orderItem.findMany({
+        where: {
+          vendorId: vendor.id,
+        },
+        distinct: ["orderId"],
+        select: {
+          orderId: true,
+        },
+      }),
+    ]);
 
     const groupedMap = new Map();
 
@@ -1179,85 +2129,236 @@ export const getVendorOrders = async (req, res) => {
           orderId,
           orderNumber: item.order.orderNumber,
           createdAt: item.order.createdAt,
+
           customer: {
             name: item.order.customerName,
             phone: item.order.phone,
             email: item.order.user?.email || null,
           },
+
           customerName: item.order.customerName,
           phone: item.order.phone,
+
           paymentMethod: item.order.paymentMethod,
           paymentStatus: item.order.paymentStatus,
+
           items: [],
-          vendorTotal: 0,
+
+          productTotal: 0,
+          totalCommission: 0,
+          vendorEarning: 0,
         });
       }
 
       const orderGroup = groupedMap.get(orderId);
 
+      const quantity = Number(item.quantity || 0);
+      const price = Number(item.price || 0);
+      const subtotal = price * quantity;
+
+      /*
+       * Snapshot fields OrderItem থেকে নেওয়া হচ্ছে।
+       * Frontend নতুন করে commission calculate করবে না।
+       */
+      const commissionAmount = Number(
+        item.commissionAmount ??
+          item.platformEarning ??
+          0
+      );
+
+      const platformEarning = Number(
+        item.platformEarning ??
+          item.commissionAmount ??
+          0
+      );
+
+      const vendorEarning = Number(
+        item.vendorEarning ??
+          Math.max(subtotal - platformEarning, 0)
+      );
+
+      const isCancelled =
+        String(item.itemStatus || "").toUpperCase() ===
+        "CANCELLED";
+
       orderGroup.items.push({
         id: item.id,
+        orderId: item.orderId,
+
         itemStatus: item.itemStatus,
-        quantity: item.quantity,
-        price: item.price,
-        subtotal: item.price * item.quantity,
+
+        quantity,
+        price,
+        subtotal,
+
         size: item.size,
         color: item.color,
+
+        commissionType: item.commissionType,
+        commissionValue: Number(
+          item.commissionValue || 0
+        ),
+        commissionAmount,
+        platformEarning,
+        vendorEarning,
+
+        /*
+         * Cancelled item history table/detail-এ থাকবে,
+         * কিন্তু financial totals-এ যোগ হবে না।
+         */
+        financialEligible: !isCancelled,
+
         product: item.product,
       });
 
-      orderGroup.vendorTotal += item.price * item.quantity;
+      if (!isCancelled) {
+        orderGroup.productTotal += subtotal;
+        orderGroup.totalCommission += platformEarning;
+        orderGroup.vendorEarning += vendorEarning;
+      }
     }
 
-    let formattedOrders = Array.from(groupedMap.values()).map((order) => ({
+    let formattedOrders = Array.from(
+      groupedMap.values()
+    ).map((order) => ({
       orderId: order.orderId,
+      id: order.orderId,
       orderNumber: order.orderNumber,
       createdAt: order.createdAt,
+
       customer: order.customer,
       customerName: order.customerName,
       phone: order.phone,
+
       paymentMethod: order.paymentMethod,
       paymentStatus: order.paymentStatus,
-      vendorStatus: getVendorStatusFromItems(order.items),
+
+      vendorStatus: getVendorStatusFromItems(
+        order.items
+      ),
+
       itemCount: order.items.length,
-      vendorTotal: order.vendorTotal,
-      image: order.items[0]?.product?.images?.[0]?.url || null,
+
+      /*
+       * New clear financial fields
+       */
+      productTotal: order.productTotal,
+      totalCommission: order.totalCommission,
+      vendorEarning: order.vendorEarning,
+
+      /*
+       * Backward compatibility:
+       * পুরোনো frontend vendorTotal পড়লেও
+       * vendor earning-ই পাবে।
+       */
+      vendorTotal: order.vendorEarning,
+
+      image:
+        order.items[0]?.product?.images?.[0]?.url ||
+        null,
+
       products: order.items.map((item) => ({
         itemId: item.id,
         productId: item.product?.id,
         name: item.product?.name,
-        image: item.product?.images?.[0]?.url || null,
+        image:
+          item.product?.images?.[0]?.url || null,
+
         quantity: item.quantity,
         itemStatus: item.itemStatus,
+
+        subtotal: item.subtotal,
+        commissionAmount:
+          item.commissionAmount,
+        platformEarning:
+          item.platformEarning,
+        vendorEarning: item.vendorEarning,
       })),
+
       items: order.items,
     }));
 
-    // PARTIALLY_* status is calculated after grouping, so filter it here.
+    /*
+     * PARTIALLY_* status item query-তে সরাসরি নেই।
+     * Grouping করার পরে calculated vendorStatus দিয়ে filter হবে।
+     */
     if (status.startsWith("PARTIALLY_")) {
       formattedOrders = formattedOrders.filter(
-        (order) => order.vendorStatus === status
+        (order) =>
+          order.vendorStatus === status
       );
     }
 
-    const totalOrders = formattedOrders.length;
-    const paginatedOrders = formattedOrders.slice(skip, skip + limit);
+    const filteredTotalOrders =
+      formattedOrders.length;
 
-    return res.json({
+    const paginatedOrders =
+      formattedOrders.slice(
+        skip,
+        skip + limit
+      );
+
+    const completedEarnings = Number(
+      completedEarningsResult?._sum
+        ?.vendorEarning || 0
+    );
+
+    const totalCommission = Number(
+      totalCommissionResult?._sum
+        ?.platformEarning || 0
+    );
+
+    const lifetimeTotalOrders =
+      lifetimeVendorOrders.length;
+
+    return res.status(200).json({
       success: true,
-      totalOrders,
+
+      /*
+       * Existing frontend compatibility
+       */
+      totalOrders: filteredTotalOrders,
       totalItems: allVendorItems.length,
       currentPage: page,
       limit,
-      totalPages: Math.ceil(totalOrders / limit),
+      totalPages: Math.max(
+        Math.ceil(filteredTotalOrders / limit),
+        1
+      ),
+
       orders: paginatedOrders,
+
+      /*
+       * New lifetime vendor dashboard stats.
+       * Search/filter/pagination এগুলো পরিবর্তন করবে না।
+       */
+      stats: {
+        totalOrders: lifetimeTotalOrders,
+        completedEarnings,
+        totalCommission,
+      },
+
+      pagination: {
+        total: filteredTotalOrders,
+        page,
+        limit,
+        totalPages: Math.max(
+          Math.ceil(filteredTotalOrders / limit),
+          1
+        ),
+      },
     });
   } catch (error) {
-    console.error("Get vendor orders error:", error);
+    console.error(
+      "Get vendor orders error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: error.message,
+      message:
+        error.message ||
+        "Failed to get vendor orders",
     });
   }
 };
@@ -1361,8 +2462,19 @@ const syncMainOrderStatusFromItems = async (
       where: {
         orderId,
       },
+
       select: {
+        id: true,
         itemStatus: true,
+        price: true,
+        quantity: true,
+
+        deliveryCharge: true,
+        shippedAt: true,
+
+        commissionAmount: true,
+        platformEarning: true,
+        vendorEarning: true,
       },
     });
 
@@ -1371,8 +2483,8 @@ const syncMainOrderStatusFromItems = async (
   }
 
   /*
-   * Item-এর actual status RESHIPPED থাকবে।
-   * Main order calculation-এ এটাকে SHIPPED ধরা হবে।
+   * RESHIPPED status main order calculation-এ
+   * SHIPPED হিসেবে ধরা হবে।
    */
   const statuses = items.map((item) => {
     const status = String(
@@ -1424,26 +2536,67 @@ const syncMainOrderStatusFromItems = async (
       "PARTIALLY_CANCELLED";
   }
 
+  /*
+   * Shared helper থেকে financial calculation।
+   */
+  const financials =
+    calculateOrderFinancials(items);
+
   return prismaClient.order.update({
     where: {
       id: orderId,
     },
+
     data: {
-      orderStatus: newOrderStatus,
+      orderStatus:
+        newOrderStatus,
+
+      /*
+       * সব applicable item delivery charge-এর total।
+       */
+      deliveryFee:
+        financials.deliveryFee,
+
+      /*
+       * Product Total + Delivery Fee
+       */
+      totalAmount:
+        financials.grandTotal,
+    },
+
+    include: {
+      items: true,
     },
   });
 };
 
-export const updateVendorOrderItemStatus = async (req, res) => {
+export const updateVendorOrderItemStatus = async (
+  req,
+  res
+) => {
   try {
     const { itemId } = req.params;
-    const { itemStatus } = req.body;
 
-    const vendor = await prisma.vendor.findUnique({
-      where: {
-        userId: req.user.id,
-      },
-    });
+    const itemStatus = String(
+      req.body.itemStatus ||
+        req.body.status ||
+        ""
+    ).toUpperCase();
+
+    if (!itemStatus) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Item status is required",
+      });
+    }
+
+    const vendor =
+      await prisma.vendor.findUnique({
+        where: {
+          userId: req.user.id,
+        },
+      });
 
     if (!vendor) {
       return res.status(404).json({
@@ -1452,268 +2605,457 @@ export const updateVendorOrderItemStatus = async (req, res) => {
       });
     }
 
-    const updatedItem = await prisma.$transaction(
-      async (tx) => {
-        const item = await tx.orderItem.findFirst({
-          where: {
-            id: itemId,
-            vendorId: vendor.id,
-          },
-          include: {
-            product: true,
-          },
-        });
-
-        if (!item) {
-          throw new Error("Order item not found");
-        }
-
-        const forwardNextStatusMap = {
-          PENDING: "CONFIRMED",
-          CONFIRMED: "PROCESSING",
-          PROCESSING: "SHIPPED",
-        };
-
-        const canCancelFrom = [
-          "CONFIRMED",
-          "PROCESSING",
-          "SHIPPED",
-        ];
-
-        if (itemStatus === "CANCELLED") {
-          if (!canCancelFrom.includes(item.itemStatus)) {
-            throw new Error(
-              `You cannot cancel item from ${item.itemStatus}`
-            );
-          }
-        } else {
-          const nextStatus =
-            forwardNextStatusMap[item.itemStatus];
-
-          if (!nextStatus) {
-            throw new Error("Item status is locked");
-          }
-
-          if (itemStatus !== nextStatus) {
-            throw new Error(
-              `You can only update ${item.itemStatus} to ${nextStatus}`
-            );
-          }
-        }
-
-        // Stock decrease: PENDING -> CONFIRMED
-        if (
-          itemStatus === "CONFIRMED" &&
-          !item.stockReduced
-        ) {
-          const variant =
-            await tx.productVariant.findFirst({
+    const result =
+      await prisma.$transaction(
+        async (tx) => {
+          const item =
+            await tx.orderItem.findFirst({
               where: {
-                productId: item.productId,
-                size: item.size || null,
-                color: item.color || null,
+                id: itemId,
+                vendorId: vendor.id,
+              },
+
+              include: {
+                product: true,
               },
             });
 
-          if (variant) {
-            if (variant.stock < item.quantity) {
+          if (!item) {
+            throw new Error(
+              "Order item not found"
+            );
+          }
+
+          /*
+           * Vendor normal forward flow:
+           *
+           * PENDING -> CONFIRMED
+           * CONFIRMED -> PROCESSING
+           * PROCESSING -> SHIPPED
+           */
+          const forwardNextStatusMap = {
+            PENDING: "CONFIRMED",
+            CONFIRMED: "PROCESSING",
+            PROCESSING: "SHIPPED",
+          };
+
+          /*
+           * Vendor cancel করতে পারবে:
+           *
+           * CONFIRMED
+           * PROCESSING
+           * SHIPPED
+           *
+           * SHIPPED-এর পরে cancel করলে shippedAt থাকবে,
+           * তাই delivery charge applicable থাকবে।
+           */
+          const canCancelFrom = [
+            "CONFIRMED",
+            "PROCESSING",
+            "SHIPPED",
+          ];
+
+          if (
+            itemStatus === "CANCELLED"
+          ) {
+            if (
+              !canCancelFrom.includes(
+                item.itemStatus
+              )
+            ) {
               throw new Error(
-                `${item.product.name} variant stock not available`
+                `You cannot cancel item from ${item.itemStatus}`
+              );
+            }
+          } else {
+            const nextStatus =
+              forwardNextStatusMap[
+                item.itemStatus
+              ];
+
+            if (!nextStatus) {
+              throw new Error(
+                "Item status is locked"
               );
             }
 
-            await tx.productVariant.update({
-              where: {
-                id: variant.id,
-              },
-              data: {
-                stock: {
-                  decrement: item.quantity,
-                },
-              },
-            });
-
-            await tx.product.update({
-              where: {
-                id: item.productId,
-              },
-              data: {
-                stock: {
-                  decrement: item.quantity,
-                },
-              },
-            });
-          } else {
-            if (item.product.stock < item.quantity) {
+            if (
+              itemStatus !== nextStatus
+            ) {
               throw new Error(
-                `${item.product.name} stock not available`
+                `You can only update ${item.itemStatus} to ${nextStatus}`
               );
             }
+          }
 
-            await tx.product.update({
-              where: {
-                id: item.productId,
-              },
-              data: {
-                stock: {
-                  decrement: item.quantity,
+          /*
+           * Stock decrease:
+           *
+           * PENDING -> CONFIRMED
+           */
+          if (
+            itemStatus === "CONFIRMED" &&
+            !item.stockReduced
+          ) {
+            const variant =
+              await tx.productVariant.findFirst(
+                {
+                  where: {
+                    productId:
+                      item.productId,
+
+                    size:
+                      item.size || null,
+
+                    color:
+                      item.color || null,
+                  },
+                }
+              );
+
+            if (variant) {
+              if (
+                variant.stock <
+                item.quantity
+              ) {
+                throw new Error(
+                  `${item.product.name} variant stock not available`
+                );
+              }
+
+              await tx.productVariant.update({
+                where: {
+                  id: variant.id,
                 },
+
+                data: {
+                  stock: {
+                    decrement:
+                      item.quantity,
+                  },
+                },
+              });
+
+              await tx.product.update({
+                where: {
+                  id: item.productId,
+                },
+
+                data: {
+                  stock: {
+                    decrement:
+                      item.quantity,
+                  },
+                },
+              });
+            } else {
+              if (
+                item.product.stock <
+                item.quantity
+              ) {
+                throw new Error(
+                  `${item.product.name} stock not available`
+                );
+              }
+
+              await tx.product.update({
+                where: {
+                  id: item.productId,
+                },
+
+                data: {
+                  stock: {
+                    decrement:
+                      item.quantity,
+                  },
+                },
+              });
+            }
+
+            await tx.orderTimeline.create({
+              data: {
+                orderId:
+                  item.orderId,
+
+                itemId:
+                  item.id,
+
+                userId:
+                  req.user.id,
+
+                title:
+                  "Stock deducted",
+
+                details: `${item.quantity} quantity deducted for ${item.product.name}`,
+
+                type: "STOCK",
               },
             });
           }
 
-          await tx.orderTimeline.create({
-            data: {
-              orderId: item.orderId,
-              itemId: item.id,
-              userId: req.user.id,
-              title: "Stock deducted",
-              details: `${item.quantity} quantity deducted for ${item.product.name}`,
-              type: "STOCK",
-            },
-          });
-        }
+          /*
+           * Cancel হলে stock return।
+           *
+           * SHIPPED-এর পরেও cancel হলে stock return হবে,
+           * কিন্তু shippedAt থাকবে।
+           */
+          if (
+            itemStatus === "CANCELLED" &&
+            item.stockReduced
+          ) {
+            const variant =
+              await tx.productVariant.findFirst(
+                {
+                  where: {
+                    productId:
+                      item.productId,
 
-        // Stock return: CONFIRMED / PROCESSING / SHIPPED -> CANCELLED
-        if (
-          itemStatus === "CANCELLED" &&
-          item.stockReduced
-        ) {
-          const variant =
-            await tx.productVariant.findFirst({
-              where: {
-                productId: item.productId,
-                size: item.size || null,
-                color: item.color || null,
-              },
-            });
+                    size:
+                      item.size || null,
 
-          if (variant) {
-            await tx.productVariant.update({
-              where: {
-                id: variant.id,
-              },
-              data: {
-                stock: {
-                  increment: item.quantity,
-                },
-              },
-            });
+                    color:
+                      item.color || null,
+                  },
+                }
+              );
 
-            await tx.product.update({
-              where: {
-                id: item.productId,
-              },
-              data: {
-                stock: {
-                  increment: item.quantity,
+            if (variant) {
+              await tx.productVariant.update({
+                where: {
+                  id: variant.id,
                 },
-              },
-            });
-          } else {
-            await tx.product.update({
-              where: {
-                id: item.productId,
-              },
-              data: {
-                stock: {
-                  increment: item.quantity,
+
+                data: {
+                  stock: {
+                    increment:
+                      item.quantity,
+                  },
                 },
+              });
+
+              await tx.product.update({
+                where: {
+                  id: item.productId,
+                },
+
+                data: {
+                  stock: {
+                    increment:
+                      item.quantity,
+                  },
+                },
+              });
+            } else {
+              await tx.product.update({
+                where: {
+                  id: item.productId,
+                },
+
+                data: {
+                  stock: {
+                    increment:
+                      item.quantity,
+                  },
+                },
+              });
+            }
+
+            await tx.orderTimeline.create({
+              data: {
+                orderId:
+                  item.orderId,
+
+                itemId:
+                  item.id,
+
+                userId:
+                  req.user.id,
+
+                title:
+                  "Stock returned",
+
+                details: `${item.quantity} quantity returned for ${item.product.name}`,
+
+                type: "STOCK",
               },
             });
           }
 
+          /*
+           * Update data আলাদা করে বানানো হচ্ছে,
+           * যাতে shippedAt safely preserve করা যায়।
+           */
+          const itemUpdateData = {
+            itemStatus,
+
+            stockReduced:
+              itemStatus === "CONFIRMED"
+                ? true
+                : itemStatus ===
+                    "CANCELLED"
+                  ? false
+                  : item.stockReduced,
+          };
+
+          /*
+           * প্রথমবার SHIPPED হলে shipment time save।
+           *
+           * কোনো কারণে আগেই shippedAt থাকলে
+           * সেটি overwrite হবে না।
+           */
+          if (
+            itemStatus === "SHIPPED"
+          ) {
+            itemUpdateData.shippedAt =
+              item.shippedAt ||
+              new Date();
+          }
+
+          /*
+           * CANCELLED হলে shippedAt field update করছি না।
+           *
+           * ফলে:
+           *
+           * Pre-shipment cancel:
+           * shippedAt = null
+           *
+           * Post-shipment cancel:
+           * shippedAt = আগের date
+           */
+          const itemAfterUpdate =
+            await tx.orderItem.update({
+              where: {
+                id: item.id,
+              },
+
+              data:
+                itemUpdateData,
+            });
+
+          const timelineTitleMap = {
+            CONFIRMED:
+              "Item Confirmed",
+
+            PROCESSING:
+              "Processing Started",
+
+            SHIPPED:
+              "Item Shipped",
+
+            CANCELLED:
+              "Item Cancelled",
+          };
+
           await tx.orderTimeline.create({
             data: {
-              orderId: item.orderId,
-              itemId: item.id,
-              userId: req.user.id,
-              title: "Stock returned",
-              details: `${item.quantity} quantity returned for ${item.product.name}`,
-              type: "STOCK",
+              orderId:
+                item.orderId,
+
+              itemId:
+                item.id,
+
+              userId:
+                req.user.id,
+
+              title:
+                timelineTitleMap[
+                  itemStatus
+                ] ||
+                "Item Status Updated",
+
+              details: `${item.product.name} changed from ${item.itemStatus} to ${itemStatus}`,
+
+              type: "STATUS",
             },
           });
+
+          /*
+           * Main order status এবং financial total
+           * একই transaction-এর মধ্যে recalculate হবে।
+           */
+          const updatedOrder =
+            await syncMainOrderStatusFromItems(
+              item.orderId,
+              tx
+            );
+
+          return {
+            oldItem: item,
+            newItem:
+              itemAfterUpdate,
+            updatedOrder,
+          };
+        },
+        {
+          maxWait: 10000,
+          timeout: 30000,
         }
-
-        const itemAfterUpdate =
-          await tx.orderItem.update({
-            where: {
-              id: item.id,
-            },
-            data: {
-              itemStatus,
-
-              stockReduced:
-                itemStatus === "CONFIRMED"
-                  ? true
-                  : itemStatus === "CANCELLED"
-                    ? false
-                    : item.stockReduced,
-            },
-          });
-
-        const timelineTitleMap = {
-          CONFIRMED: "Item Confirmed",
-          PROCESSING: "Processing Started",
-          SHIPPED: "Item Shipped",
-          CANCELLED: "Item Cancelled",
-        };
-
-        await tx.orderTimeline.create({
-          data: {
-            orderId: item.orderId,
-            itemId: item.id,
-            userId: req.user.id,
-            title:
-              timelineTitleMap[itemStatus] ||
-              "Item Status Updated",
-            details: `${item.product.name} changed from ${item.itemStatus} to ${itemStatus}`,
-            type: "STATUS",
-          },
-        });
-
-        await syncMainOrderStatusFromItems(
-          item.orderId,
-          tx
-        );
-
-        return {
-          oldItem: item,
-          newItem: itemAfterUpdate,
-        };
-      },
-      {
-        maxWait: 10000,
-        timeout: 30000,
-      }
-    );
+      );
 
     await createActivityLog({
-      userId: req.user.id,
-      action: "VENDOR_ORDER_ITEM_STATUS_UPDATED",
-      entityType: "ORDER_ITEM",
-      entityId: updatedItem.newItem.id,
+      userId:
+        req.user.id,
+
+      action:
+        "VENDOR_ORDER_ITEM_STATUS_UPDATED",
+
+      entityType:
+        "ORDER_ITEM",
+
+      entityId:
+        result.newItem.id,
 
       oldData: {
-        itemStatus: updatedItem.oldItem.itemStatus,
+        itemStatus:
+          result.oldItem.itemStatus,
+
         stockReduced:
-          updatedItem.oldItem.stockReduced,
+          result.oldItem.stockReduced,
+
+        shippedAt:
+          result.oldItem.shippedAt,
+
+        deliveryCharge:
+          result.oldItem.deliveryCharge,
       },
 
       newData: {
-        itemStatus: updatedItem.newItem.itemStatus,
+        itemStatus:
+          result.newItem.itemStatus,
+
         stockReduced:
-          updatedItem.newItem.stockReduced,
+          result.newItem.stockReduced,
+
+        shippedAt:
+          result.newItem.shippedAt,
+
+        deliveryFee:
+          result.updatedOrder
+            ?.deliveryFee,
+
+        totalAmount:
+          result.updatedOrder
+            ?.totalAmount,
+
+        orderStatus:
+          result.updatedOrder
+            ?.orderStatus,
       },
 
       req,
     });
 
-    return res.json({
+    return res.status(200).json({
       success: true,
+
       message:
         "Order item status updated successfully",
-      item: updatedItem.newItem,
+
+      item:
+        result.newItem,
+
+      order:
+        result.updatedOrder,
     });
   } catch (error) {
     console.error(
@@ -1723,6 +3065,7 @@ export const updateVendorOrderItemStatus = async (req, res) => {
 
     return res.status(400).json({
       success: false,
+
       message:
         error.message ||
         "Failed to update order item status",
@@ -1817,7 +3160,9 @@ export const getVendorOrderDetails = async (req, res) => {
     const { orderId } = req.params;
 
     const vendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
     });
 
     if (!vendor) {
@@ -1830,32 +3175,38 @@ export const getVendorOrderDetails = async (req, res) => {
     const order = await prisma.order.findFirst({
       where: {
         id: orderId,
+
         items: {
           some: {
             vendorId: vendor.id,
           },
         },
       },
+
       select: {
         id: true,
         orderNumber: true,
         createdAt: true,
         paymentMethod: true,
         paymentStatus: true,
+
         notes: {
           where: {
             vendorId: vendor.id,
             noteType: "VENDOR_INTERNAL",
           },
+
           orderBy: {
             createdAt: "desc",
           },
+
           select: {
             id: true,
             note: true,
             noteType: true,
             visibleToCustomer: true,
             createdAt: true,
+
             user: {
               select: {
                 id: true,
@@ -1865,16 +3216,19 @@ export const getVendorOrderDetails = async (req, res) => {
             },
           },
         },
+
         timelines: {
           orderBy: {
             createdAt: "asc",
           },
+
           select: {
             id: true,
             title: true,
             details: true,
             type: true,
             createdAt: true,
+
             user: {
               select: {
                 id: true,
@@ -1885,54 +3239,65 @@ export const getVendorOrderDetails = async (req, res) => {
           },
         },
 
-items: {
-  where: {
-    vendorId: vendor.id,
-  },
-
-  select: {
-    id: true,
-    itemStatus: true,
-
-    returnStatus: true,
-    deliveredAt: true,
-    completedAt: true,
-    returnRequestedAt: true,
-    returnResolvedAt: true,
-
-    quantity: true,
-    price: true,
-    size: true,
-    color: true,
-    stockReduced: true,
-
-    vendor: {
-      select: {
-        id: true,
-        shopName: true,
-        shopSlug: true,
-      },
-    },
-
-    product: {
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-
-        images: {
+        items: {
           where: {
-            isMain: true,
+            vendorId: vendor.id,
           },
+
           select: {
-            url: true,
+            id: true,
+            itemStatus: true,
+
+            returnStatus: true,
+            deliveredAt: true,
+            completedAt: true,
+            returnRequestedAt: true,
+            returnResolvedAt: true,
+
+            quantity: true,
+            price: true,
+            size: true,
+            color: true,
+            stockReduced: true,
+
+            /*
+             * Commission snapshot fields
+             */
+            commissionType: true,
+            commissionValue: true,
+            commissionAmount: true,
+            platformEarning: true,
+            vendorEarning: true,
+
+            vendor: {
+              select: {
+                id: true,
+                shopName: true,
+                shopSlug: true,
+              },
+            },
+
+            product: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+
+                images: {
+                  where: {
+                    isMain: true,
+                  },
+
+                  select: {
+                    url: true,
+                  },
+
+                  take: 1,
+                },
+              },
+            },
           },
-          take: 1,
         },
-      },
-    },
-  },
-},
       },
     });
 
@@ -1943,34 +3308,142 @@ items: {
       });
     }
 
-    const items = order.items.map((item) => ({
-      ...item,
-      subtotal: item.price * item.quantity,
-    }));
+    const items = order.items.map((item) => {
+      const price = Number(item.price || 0);
+      const quantity = Number(item.quantity || 0);
 
-    const vendorTotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+      const subtotal = price * quantity;
 
-    return res.json({
+      const commissionAmount = Number(
+        item.commissionAmount ??
+          item.platformEarning ??
+          0
+      );
+
+      const platformEarning = Number(
+        item.platformEarning ??
+          item.commissionAmount ??
+          0
+      );
+
+      /*
+       * পুরোনো order-এ vendorEarning null হলে fallback।
+       */
+      const vendorEarning = Number(
+        item.vendorEarning ??
+          Math.max(
+            subtotal - platformEarning,
+            0
+          )
+      );
+
+      const financialEligible =
+        String(
+          item.itemStatus || ""
+        ).toUpperCase() !== "CANCELLED";
+
+      return {
+        ...item,
+
+        price,
+        quantity,
+        subtotal,
+
+        commissionValue: Number(
+          item.commissionValue || 0
+        ),
+
+        commissionAmount,
+        platformEarning,
+        vendorEarning,
+        financialEligible,
+      };
+    });
+
+    /*
+     * Cancelled item summary total-এ যোগ হবে না।
+     */
+    const financialSummary = items.reduce(
+      (result, item) => {
+        if (!item.financialEligible) {
+          return result;
+        }
+
+        result.productTotal += Number(
+          item.subtotal || 0
+        );
+
+        result.totalCommission += Number(
+          item.platformEarning ||
+            item.commissionAmount ||
+            0
+        );
+
+        result.vendorEarning += Number(
+          item.vendorEarning || 0
+        );
+
+        return result;
+      },
+      {
+        productTotal: 0,
+        totalCommission: 0,
+        vendorEarning: 0,
+      }
+    );
+
+    return res.status(200).json({
       success: true,
+
       order: {
         id: order.id,
         orderNumber: order.orderNumber,
         createdAt: order.createdAt,
+
         paymentMethod: order.paymentMethod,
         paymentStatus: order.paymentStatus,
-        vendorStatus: getVendorStatusFromItems(items),
-        vendorTotal,
+
+        vendorStatus:
+          getVendorStatusFromItems(items),
+
+        /*
+         * Vendor financial summary
+         */
+        productTotal:
+          financialSummary.productTotal,
+
+        totalCommission:
+          financialSummary.totalCommission,
+
+        vendorEarning:
+          financialSummary.vendorEarning,
+
+        /*
+         * Compatibility alias
+         */
+        vendorTotal:
+          financialSummary.vendorEarning,
+
         items,
+
         notes: order.notes || [],
-        timeline: order.timelines || [],
+
+        timeline:
+          order.timelines || [],
       },
     });
   } catch (error) {
-    console.error("Get vendor order details error:", error);
+    console.error(
+      "Get vendor order details error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: error.message,
+
+      message:
+        error.message ||
+        "Failed to get vendor order details",
     });
   }
 };
@@ -2057,12 +3530,17 @@ export const addVendorOrderNote = async (req, res) => {
     });
   }
 };
-export const updateOrderItemStatusByAdmin = async (req, res) => {
+export const updateOrderItemStatusByAdmin = async (
+  req,
+  res
+) => {
   try {
     const { itemId } = req.params;
 
     const itemStatus = String(
-      req.body.itemStatus || req.body.status || ""
+      req.body.itemStatus ||
+        req.body.status ||
+        ""
     ).toUpperCase();
 
     const cancellationReason = String(
@@ -2106,151 +3584,293 @@ export const updateOrderItemStatusByAdmin = async (req, res) => {
       });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      const existingItem = await tx.orderItem.findUnique({
-        where: { id: itemId },
-        include: {
-          product: true,
+    const result =
+      await prisma.$transaction(
+        async (tx) => {
+          const existingItem =
+            await tx.orderItem.findUnique({
+              where: {
+                id: itemId,
+              },
+
+              include: {
+                product: true,
+              },
+            });
+
+          if (!existingItem) {
+            throw new Error(
+              "Order item not found"
+            );
+          }
+
+          if (
+            ["COMPLETED", "CANCELLED"].includes(
+              existingItem.itemStatus
+            )
+          ) {
+            throw new Error(
+              "This item is locked"
+            );
+          }
+
+          /*
+           * Admin normal forward flow:
+           *
+           * PENDING -> CONFIRMED
+           * CONFIRMED -> PROCESSING
+           * PROCESSING -> SHIPPED
+           * SHIPPED -> DELIVERED
+           * RESHIPPED -> DELIVERED
+           * DELIVERED -> COMPLETED
+           */
+          const nextStatusMap = {
+            PENDING: "CONFIRMED",
+            CONFIRMED: "PROCESSING",
+            PROCESSING: "SHIPPED",
+            SHIPPED: "DELIVERED",
+            RESHIPPED: "DELIVERED",
+            DELIVERED: "COMPLETED",
+          };
+
+          if (
+            itemStatus !== "CANCELLED"
+          ) {
+            const allowedNextStatus =
+              nextStatusMap[
+                existingItem.itemStatus
+              ];
+
+            if (!allowedNextStatus) {
+              throw new Error(
+                `Item status ${existingItem.itemStatus} is locked`
+              );
+            }
+
+            if (
+              itemStatus !==
+              allowedNextStatus
+            ) {
+              throw new Error(
+                `Admin can only update ${existingItem.itemStatus} to ${allowedNextStatus}`
+              );
+            }
+          }
+
+          /*
+           * Update data আলাদা করে তৈরি করা হচ্ছে।
+           * এতে shippedAt safely preserve হবে।
+           */
+          const updateData = {
+            itemStatus,
+          };
+
+          /*
+           * প্রথমবার SHIPPED হলে shipment date save।
+           *
+           * আগে shippedAt থাকলে overwrite হবে না।
+           */
+          if (
+            itemStatus === "SHIPPED"
+          ) {
+            updateData.shippedAt =
+              existingItem.shippedAt ||
+              new Date();
+          }
+
+          /*
+           * DELIVERED status।
+           */
+          if (
+            itemStatus === "DELIVERED"
+          ) {
+            updateData.deliveredAt =
+              new Date();
+
+            updateData.completedAt =
+              null;
+
+            /*
+             * Replacement item delivery হলে
+             * return RESOLVED হবে।
+             */
+            if (
+              existingItem.returnStatus ===
+              "RESHIPPED"
+            ) {
+              updateData.returnStatus =
+                "RESOLVED";
+
+              updateData.returnResolvedAt =
+                new Date();
+            }
+          }
+
+          /*
+           * COMPLETED status।
+           */
+          if (
+            itemStatus === "COMPLETED"
+          ) {
+            updateData.completedAt =
+              new Date();
+          }
+
+          /*
+           * CANCELLED হলে shippedAt update করছি না।
+           *
+           * Pre-shipment cancellation:
+           * shippedAt = null
+           * delivery charge বাদ যাবে।
+           *
+           * Post-shipment cancellation:
+           * shippedAt = পুরোনো date
+           * delivery charge থাকবে।
+           */
+          const updatedItem =
+            await tx.orderItem.update({
+              where: {
+                id: itemId,
+              },
+
+              data: updateData,
+
+              include: {
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    images: true,
+                  },
+                },
+              },
+            });
+
+          await tx.orderTimeline.create({
+            data: {
+              orderId:
+                existingItem.orderId,
+
+              itemId:
+                existingItem.id,
+
+              userId:
+                req.user.id,
+
+              title:
+                itemStatus ===
+                "CANCELLED"
+                  ? "Item Cancelled by Admin"
+                  : `Item ${itemStatus}`,
+
+              details:
+                itemStatus ===
+                "CANCELLED"
+                  ? `${existingItem.product.name} changed from ${existingItem.itemStatus} to CANCELLED. Reason: ${cancellationReason}`
+                  : `${existingItem.product.name} changed from ${existingItem.itemStatus} to ${itemStatus}`,
+
+              type:
+                itemStatus ===
+                "CANCELLED"
+                  ? "CANCELLED"
+                  : "STATUS",
+            },
+          });
+
+          /*
+           * Main order status এবং financial totals
+           * একই transaction-এর মধ্যে update হবে।
+           */
+          const updatedOrder =
+            await syncMainOrderStatusFromItems(
+              existingItem.orderId,
+              tx
+            );
+
+          return {
+            updatedItem,
+            updatedOrder,
+
+            oldStatus:
+              existingItem.itemStatus,
+
+            oldShippedAt:
+              existingItem.shippedAt,
+
+            oldDeliveryCharge:
+              existingItem.deliveryCharge,
+          };
         },
-      });
-
-      if (!existingItem) {
-        throw new Error("Order item not found");
-      }
-
-      if (
-        ["COMPLETED", "CANCELLED"].includes(
-          existingItem.itemStatus
-        )
-      ) {
-        throw new Error("This item is locked");
-      }
-
-const nextStatusMap = {
-  PENDING: "CONFIRMED",
-  CONFIRMED: "PROCESSING",
-  PROCESSING: "SHIPPED",
-  SHIPPED: "DELIVERED",
-  RESHIPPED: "DELIVERED",
-  DELIVERED: "COMPLETED",
-};
-
-      if (itemStatus !== "CANCELLED") {
-        const allowedNextStatus =
-          nextStatusMap[existingItem.itemStatus];
-
-        if (itemStatus !== allowedNextStatus) {
-          throw new Error(
-            `Admin can only update ${existingItem.itemStatus} to ${allowedNextStatus}`
-          );
+        {
+          maxWait: 10000,
+          timeout: 20000,
         }
-      }
-
- const updatedItem = await tx.orderItem.update({
-  where: {
-    id: itemId,
-  },
-
-data: {
-  itemStatus,
-
-  ...(itemStatus === "DELIVERED"
-    ? {
-        deliveredAt: new Date(),
-        completedAt: null,
-
-        returnStatus:
-          existingItem.returnStatus ===
-          "RESHIPPED"
-            ? "RESOLVED"
-            : existingItem.returnStatus,
-
-        returnResolvedAt:
-          existingItem.returnStatus ===
-          "RESHIPPED"
-            ? new Date()
-            : existingItem.returnResolvedAt,
-      }
-    : {}),
-
-  ...(itemStatus === "COMPLETED"
-    ? {
-        completedAt: new Date(),
-      }
-    : {}),
-},
-
-  include: {
-    product: {
-      select: {
-        id: true,
-        name: true,
-        images: true,
-      },
-    },
-  },
-});
-
-      await tx.orderTimeline.create({
-        data: {
-          orderId: existingItem.orderId,
-          itemId: existingItem.id,
-          userId: req.user.id,
-          title:
-            itemStatus === "CANCELLED"
-              ? "Item Cancelled by Admin"
-              : `Item ${itemStatus}`,
-          details:
-            itemStatus === "CANCELLED"
-              ? `${existingItem.product.name} changed from ${existingItem.itemStatus} to CANCELLED. Reason: ${cancellationReason}`
-              : `${existingItem.product.name} changed from ${existingItem.itemStatus} to ${itemStatus}`,
-          type:
-            itemStatus === "CANCELLED"
-              ? "CANCELLED"
-              : "STATUS",
-        },
-      });
-
-      const updatedOrder =
-        await syncMainOrderStatusFromItems(
-          existingItem.orderId,
-          tx
-        );
-
-      return {
-        updatedItem,
-        updatedOrder,
-        oldStatus: existingItem.itemStatus,
-      };
-    },
-    {
-      maxWait: 10000,
-      timeout: 20000,
-    });
+      );
 
     await createActivityLog({
       userId: req.user.id,
-      action: "ADMIN_ORDER_ITEM_STATUS_UPDATED",
-      entityType: "ORDER_ITEM",
-      entityId: result.updatedItem.id,
+
+      action:
+        "ADMIN_ORDER_ITEM_STATUS_UPDATED",
+
+      entityType:
+        "ORDER_ITEM",
+
+      entityId:
+        result.updatedItem.id,
+
       oldData: {
-        itemStatus: result.oldStatus,
+        itemStatus:
+          result.oldStatus,
+
+        shippedAt:
+          result.oldShippedAt,
+
+        deliveryCharge:
+          result.oldDeliveryCharge,
       },
+
       newData: {
-        itemStatus: result.updatedItem.itemStatus,
-        orderStatus: result.updatedOrder.orderStatus,
-        ...(itemStatus === "CANCELLED"
-          ? { cancellationReason }
+        itemStatus:
+          result.updatedItem.itemStatus,
+
+        shippedAt:
+          result.updatedItem.shippedAt,
+
+        orderStatus:
+          result.updatedOrder
+            ?.orderStatus,
+
+        deliveryFee:
+          result.updatedOrder
+            ?.deliveryFee,
+
+        totalAmount:
+          result.updatedOrder
+            ?.totalAmount,
+
+        ...(itemStatus ===
+        "CANCELLED"
+          ? {
+              cancellationReason,
+            }
           : {}),
       },
+
       req,
     });
 
-    return res.json({
+    return res.status(200).json({
       success: true,
-      message: "Item and main order status updated",
-      item: result.updatedItem,
-      order: result.updatedOrder,
+
+      message:
+        "Item and main order status updated",
+
+      item:
+        result.updatedItem,
+
+      order:
+        result.updatedOrder,
     });
   } catch (error) {
     console.error(
@@ -2260,7 +3880,10 @@ data: {
 
     return res.status(400).json({
       success: false,
-      message: error.message,
+
+      message:
+        error.message ||
+        "Failed to update item status",
     });
   }
 };
