@@ -445,14 +445,35 @@ model ActivityLog {
 }
 
 model PayoutRequest {
-  id        String   @id @default(uuid())
-  vendorId  String
-  amount    Float
-  status    String   @default("PENDING")
-  note      String?
+  id       String       @id @default(uuid())
+  vendorId String
+  amount   Float
+  status   PayoutStatus @default(PENDING)
+
+  paymentMethod String
+  accountName   String?
+  accountNumber String
+
+  vendorNote      String?
+  adminNote       String?
+  transactionId   String?
+  rejectionReason String?
+
+  approvedAt  DateTime?
+  paidAt      DateTime?
+  rejectedAt  DateTime?
+  cancelledAt DateTime?
+
+  processedById String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  vendor    Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model PlatformSetting {
@@ -599,4 +620,12 @@ enum AddressType {
   HOME
   OFFICE
   OTHER
+}
+
+enum PayoutStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+  CANCELLED
 }
