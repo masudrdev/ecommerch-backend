@@ -8,38 +8,42 @@ datasource db {
 }
 
 model User {
-  id                       String           @id @default(uuid())
-  name                     String
-  email                    String           @unique
-  phone                    String?
-  password                 String
-  role                     Role             @default(CUSTOMER)
-  status                   UserStatus       @default(ACTIVE)
-  isEmailVerified          Boolean          @default(false)
-  emailVerificationCode    String?
-  emailVerificationExpires DateTime?
-  avatar                   String?
-  createdAt                DateTime         @default(now())
-  updatedAt                DateTime         @updatedAt
-  username                 String           @unique
-  resetPasswordCode        String?
-  resetPasswordExpires     DateTime?
-  refreshToken             String?
-  activityLogs             ActivityLog[]
-  cart                     Cart?
-  notifications            Notification[]
-  createdOrders            Order[]          @relation("OrderCreatedBy")
-  orders                   Order[]
-  orderNotes               OrderNote[]
-  orderTimelines           OrderTimeline[]
-  approvedProducts         Product[]        @relation("ProductApprovedBy")
-  products                 Product[]
-  reviews                  Review[]
-  supportMessages          SupportMessage[]
-  supportTickets           SupportTicket[]
-  addresses                UserAddress[]
-  vendor                   Vendor?
-  wishlists                Wishlist[]
+  id                        String            @id @default(uuid())
+  name                      String
+  email                     String            @unique
+  phone                     String?
+  password                  String
+  role                      Role              @default(CUSTOMER)
+  status                    UserStatus        @default(ACTIVE)
+  isEmailVerified           Boolean           @default(false)
+  emailVerificationCode     String?
+  emailVerificationExpires  DateTime?
+  avatar                    String?
+  createdAt                 DateTime          @default(now())
+  updatedAt                 DateTime          @updatedAt
+  username                  String            @unique
+  resetPasswordCode         String?
+  resetPasswordExpires      DateTime?
+  refreshToken              String?
+  activityLogs              ActivityLog[]
+  cart                      Cart?
+  notifications             Notification[]
+  createdOrders             Order[]           @relation("OrderCreatedBy")
+  orders                    Order[]
+  orderNotes                OrderNote[]
+  orderTimelines            OrderTimeline[]
+  approvedProducts          Product[]         @relation("ProductApprovedBy")
+  products                  Product[]
+  reviews                   Review[]
+  supportTicketsCreated     SupportTicket[]   @relation("SupportTicketCreatedBy")
+  supportTicketsAssigned    SupportTicket[]   @relation("SupportTicketAssignedTo")
+  supportTicketsEscalatedBy SupportTicket[]   @relation("SupportTicketEscalatedBy")
+  supportTicketsEscalatedTo SupportTicket[]   @relation("SupportTicketEscalatedTo")
+  supportMessages           SupportMessage[]
+  supportActivities         SupportActivity[]
+  addresses                 UserAddress[]
+  vendor                    Vendor?
+  wishlists                 Wishlist[]
 }
 
 model OrderTimeline {
@@ -74,26 +78,122 @@ model UserAddress {
 }
 
 model SupportTicket {
-  id        String           @id @default(uuid())
-  userId    String
-  subject   String
-  category  String?
-  status    TicketStatus     @default(OPEN)
-  orderId   String?
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
-  messages  SupportMessage[]
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String  @id @default(uuid())
+  ticketNumber String? @unique
+
+  userId String
+  user   User   @relation("SupportTicketCreatedBy", fields: [userId], references: [id], onDelete: Cascade)
+
+  subject     String
+  description String?
+  category    String?
+  priority    TicketPriority @default(MEDIUM)
+  status      TicketStatus   @default(OPEN)
+
+  orderId String?
+
+  assignedToId String?
+  assignedTo   User?   @relation("SupportTicketAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  escalatedById String?
+  escalatedBy   User?   @relation("SupportTicketEscalatedBy", fields: [escalatedById], references: [id], onDelete: SetNull)
+
+  escalatedToId String?
+  escalatedTo   User?   @relation("SupportTicketEscalatedTo", fields: [escalatedToId], references: [id], onDelete: SetNull)
+
+  escalationReason  String?
+  resolutionSummary String?
+
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  lastActivityAt  DateTime  @default(now())
+
+  customerRating   Int?
+  customerFeedback String?
+
+  isArchived Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages    SupportMessage[]
+  attachments SupportAttachment[]
+  activities  SupportActivity[]
+
+  @@index([userId])
+  @@index([assignedToId])
+  @@index([escalatedToId])
+  @@index([status])
+  @@index([priority])
+  @@index([category])
+  @@index([createdAt])
+  @@index([lastActivityAt])
 }
 
 model SupportMessage {
-  id        String        @id @default(uuid())
+  id       String @id @default(uuid())
+  ticketId String
+  senderId String
+
+  message    String
+  isInternal Boolean @default(false)
+  isEdited   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  sender User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  attachments SupportAttachment[]
+
+  @@index([ticketId])
+  @@index([senderId])
+  @@index([createdAt])
+}
+
+model SupportAttachment {
+  id String @id @default(uuid())
+
   ticketId  String
-  senderId  String
-  message   String
-  createdAt DateTime      @default(now())
-  sender    User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  messageId String?
+
+  fileName String
+  fileUrl  String
+  fileType String?
+  fileSize Int?
+
+  isSensitive Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  ticket  SupportTicket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  message SupportMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@index([messageId])
+}
+
+model SupportActivity {
+  id String @id @default(uuid())
+
+  ticketId String
+  userId   String?
+
+  action   SupportActivityType
+  details  String?
+  oldValue String?
+  newValue String?
+
+  createdAt DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId])
+  @@index([userId])
+  @@index([createdAt])
 }
 
 model Vendor {
@@ -448,8 +548,51 @@ enum PaymentStatus {
 enum TicketStatus {
   OPEN
   PENDING
+  IN_PROGRESS
+  WAITING_FOR_CUSTOMER
+  WAITING_FOR_STAFF
+  ESCALATED
   RESOLVED
   CLOSED
+  REJECTED
+}
+
+enum TicketCategory {
+  ORDER_ISSUE
+  PAYMENT_ISSUE
+  REFUND_REQUEST
+  WITHDRAWAL_ISSUE
+  ACCOUNT_ISSUE
+  PRODUCT_ISSUE
+  DELIVERY_ISSUE
+  TECHNICAL_ISSUE
+  VENDOR_ISSUE
+  OTHER
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SupportActivityType {
+  TICKET_CREATED
+  REPLY_ADDED
+  INTERNAL_NOTE_ADDED
+  ASSIGNED
+  REASSIGNED
+  PRIORITY_CHANGED
+  STATUS_CHANGED
+  ESCALATED
+  RESOLVED
+  CLOSED
+  REOPENED
+  REJECTED
+  ATTACHMENT_ADDED
+  RATING_ADDED
+  ARCHIVED
 }
 
 enum AddressType {
