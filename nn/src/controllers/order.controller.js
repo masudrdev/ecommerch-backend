@@ -24,7 +24,7 @@ const calculateCommissionSnapshot = ({
   } else if (type === "FIXED") {
     // Fixed commission is applied once per order-item line,
     // not multiplied by quantity.
-     commissionAmount = value * safeQuantity;
+    commissionAmount = value;
   }
 
   // Commission cannot be greater than the item subtotal.
@@ -3709,76 +3709,12 @@ export const updateOrderItemStatusByAdmin = async (
           /*
            * COMPLETED status।
            */
-/*
- * COMPLETED status।
- */
-/*
- * COMPLETED status।
- */
-if (
-  itemStatus === "COMPLETED"
-) {
-  updateData.completedAt =
-    new Date();
-
-
-  /*
-   * Create vendor earning transaction
-   * and update vendor balance only once
-   */
-  const existingFinance =
-    await tx.financeTransaction.findFirst({
-      where: {
-        referenceId: existingItem.id,
-        type: "VENDOR_EARNING",
-      },
-    });
-
-
-  if (!existingFinance) {
-
-    const earningAmount =
-      Number(
-        existingItem.vendorEarning || 0
-      );
-
-
-    // Finance history
-    await tx.financeTransaction.create({
-      data: {
-        type: "VENDOR_EARNING",
-
-        amount:
-          earningAmount,
-
-        vendorId:
-          existingItem.vendorId,
-
-        referenceId:
-          existingItem.id,
-
-        description:
-          `Vendor earning generated for completed order item ${existingItem.id}`,
-      },
-    });
-
-
-    // Add money to vendor wallet
-    await tx.vendor.update({
-      where: {
-        id: existingItem.vendorId,
-      },
-
-      data: {
-        availableBalance: {
-          increment:
-            earningAmount,
-        },
-      },
-    });
-
-  }
-}
+          if (
+            itemStatus === "COMPLETED"
+          ) {
+            updateData.completedAt =
+              new Date();
+          }
 
           /*
            * CANCELLED হলে shippedAt update করছি না।

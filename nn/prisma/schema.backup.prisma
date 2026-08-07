@@ -8,43 +8,42 @@ datasource db {
 }
 
 model User {
-  id                        String               @id @default(uuid())
+  id                        String            @id @default(uuid())
   name                      String
-  email                     String               @unique
+  email                     String            @unique
   phone                     String?
   password                  String
-  role                      Role                 @default(CUSTOMER)
-  status                    UserStatus           @default(ACTIVE)
-  isEmailVerified           Boolean              @default(false)
+  role                      Role              @default(CUSTOMER)
+  status                    UserStatus        @default(ACTIVE)
+  isEmailVerified           Boolean           @default(false)
   emailVerificationCode     String?
   emailVerificationExpires  DateTime?
   avatar                    String?
-  createdAt                 DateTime             @default(now())
-  updatedAt                 DateTime             @updatedAt
-  username                  String               @unique
+  createdAt                 DateTime          @default(now())
+  updatedAt                 DateTime          @updatedAt
+  username                  String            @unique
   resetPasswordCode         String?
   resetPasswordExpires      DateTime?
   refreshToken              String?
   activityLogs              ActivityLog[]
   cart                      Cart?
   notifications             Notification[]
-  createdOrders             Order[]              @relation("OrderCreatedBy")
+  createdOrders             Order[]           @relation("OrderCreatedBy")
   orders                    Order[]
   orderNotes                OrderNote[]
   orderTimelines            OrderTimeline[]
-  approvedProducts          Product[]            @relation("ProductApprovedBy")
+  approvedProducts          Product[]         @relation("ProductApprovedBy")
   products                  Product[]
   reviews                   Review[]
-  supportTicketsCreated     SupportTicket[]      @relation("SupportTicketCreatedBy")
-  supportTicketsAssigned    SupportTicket[]      @relation("SupportTicketAssignedTo")
-  supportTicketsEscalatedBy SupportTicket[]      @relation("SupportTicketEscalatedBy")
-  supportTicketsEscalatedTo SupportTicket[]      @relation("SupportTicketEscalatedTo")
+  supportTicketsCreated     SupportTicket[]   @relation("SupportTicketCreatedBy")
+  supportTicketsAssigned    SupportTicket[]   @relation("SupportTicketAssignedTo")
+  supportTicketsEscalatedBy SupportTicket[]   @relation("SupportTicketEscalatedBy")
+  supportTicketsEscalatedTo SupportTicket[]   @relation("SupportTicketEscalatedTo")
   supportMessages           SupportMessage[]
   supportActivities         SupportActivity[]
   addresses                 UserAddress[]
   vendor                    Vendor?
   wishlists                 Wishlist[]
-  financeTransactions       FinanceTransaction[]
 }
 
 model OrderTimeline {
@@ -198,26 +197,25 @@ model SupportActivity {
 }
 
 model Vendor {
-  id                     String               @id @default(uuid())
-  userId                 String               @unique
+  id                     String          @id @default(uuid())
+  userId                 String          @unique
   shopName               String
-  shopSlug               String               @unique
+  shopSlug               String          @unique
   shopLogo               String?
   shopBanner             String?
   description            String?
-  status                 VendorStatus         @default(PENDING)
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @updatedAt
-  availableBalance       Float                @default(0)
-  totalWithdrawn         Float                @default(0)
+  status                 VendorStatus    @default(PENDING)
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  availableBalance       Float           @default(0)
+  totalWithdrawn         Float           @default(0)
   defaultCommissionType  CommissionType?
   defaultCommissionValue Float?
   orders                 OrderItem[]
   orderNotes             OrderNote[]
   payouts                PayoutRequest[]
   products               Product[]
-  financeTransactions    FinanceTransaction[]
-  user                   User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Category {
@@ -478,34 +476,6 @@ model PayoutRequest {
   @@index([createdAt])
 }
 
-model FinanceTransaction {
-  id String @id @default(uuid())
-
-  type FinanceTransactionType
-
-  amount Float
-
-  status FinanceTransactionStatus @default(COMPLETED)
-
-  referenceId String?
-
-  description String?
-
-  vendorId String?
-  userId   String?
-
-  createdAt DateTime @default(now())
-
-  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([type])
-  @@index([vendorId])
-  @@index([userId])
-  @@index([createdAt])
-}
-
 model PlatformSetting {
   id                     String         @id @default("GLOBAL")
   defaultCommissionType  CommissionType @default(PERCENTAGE)
@@ -545,30 +515,6 @@ enum ProductStatus {
 enum CommissionType {
   PERCENTAGE
   FIXED
-}
-
-enum FinanceTransactionType {
-  ORDER_PAYMENT
-
-  COMMISSION
-
-  VENDOR_EARNING
-
-  PAYOUT
-
-  REFUND
-
-  ADJUSTMENT
-}
-
-enum FinanceTransactionStatus {
-  COMPLETED
-
-  PENDING
-
-  FAILED
-
-  CANCELLED
 }
 
 enum OrderStatus {

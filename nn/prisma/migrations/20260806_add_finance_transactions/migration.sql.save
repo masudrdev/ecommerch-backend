@@ -1,0 +1,10 @@
+ CREATE TYPE "FinanceTransactionType" AS ENUM (
+ 'ORDER_PAYMENT',
+ 'COMMISSION',
+ ...
+);
+
+CREATE TABLE "FinanceTransaction" (
+...
+);
+
