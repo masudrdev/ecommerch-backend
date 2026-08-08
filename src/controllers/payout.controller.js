@@ -392,6 +392,22 @@ export const cancelMyPayout = async (req, res) => {
           },
         },
       });
+      await tx.financeTransaction.create({
+        data: {
+          type: "PAYOUT",
+
+          amount: payout.amount,
+
+          status: "COMPLETED",
+
+          referenceId: payout.id,
+
+          vendorId: payout.vendorId,
+
+          description:
+            `Vendor payout completed. Transaction ID: ${transactionId.trim()}`,
+        },
+      });
 
       return tx.payoutRequest.findUnique({
         where: {
@@ -553,39 +569,39 @@ export const getAllPayoutRequests = async (req, res) => {
       where: {
         ...(status && status !== "ALL"
           ? {
-              status,
-            }
+            status,
+          }
           : {}),
 
         ...(search?.trim()
           ? {
-              OR: [
-                {
-                  accountNumber: {
+            OR: [
+              {
+                accountNumber: {
+                  contains: search.trim(),
+                  mode: "insensitive",
+                },
+              },
+              {
+                vendor: {
+                  shopName: {
                     contains: search.trim(),
                     mode: "insensitive",
                   },
                 },
-                {
-                  vendor: {
-                    shopName: {
+              },
+              {
+                vendor: {
+                  user: {
+                    name: {
                       contains: search.trim(),
                       mode: "insensitive",
                     },
                   },
                 },
-                {
-                  vendor: {
-                    user: {
-                      name: {
-                        contains: search.trim(),
-                        mode: "insensitive",
-                      },
-                    },
-                  },
-                },
-              ],
-            }
+              },
+            ],
+          }
           : {}),
       },
 
