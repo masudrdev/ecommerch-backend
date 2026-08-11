@@ -561,82 +561,389 @@ export const getAdminPayoutSummary = async (req, res) => {
  * GET /api/payouts/admin/all
  * ==========================================
  */
+/**
+ * ==========================================
+ * ADMIN/SUPER ADMIN: ALL PAYOUT REQUESTS
+ * GET /api/payouts/admin/all
+ *
+ * Supports:
+ * - Request ID search
+ * - Vendor name/email search
+ * - Account number search
+ * - Transaction ID search
+ * - Vendor filter
+ * - Status filter
+ * - Payment method filter
+ * - Date range filter
+ * - Pagination
+ * - Filtered summary cards
+ * ==========================================
+ */
 export const getAllPayoutRequests = async (req, res) => {
   try {
-    const { status, search } = req.query;
+    const {
+      status,
+      search,
+      vendorId,
+      paymentMethod,
+      dateFrom,
+      dateTo,
+      page = 1,
+      limit = 10,
+    } = req.query;
 
-    const payouts = await prisma.payoutRequest.findMany({
-      where: {
-        ...(status && status !== "ALL"
-          ? {
-            status,
-          }
-          : {}),
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const perPage = Math.min(
+      Math.max(Number(limit) || 10, 1),
+      100
+    );
 
-        ...(search?.trim()
-          ? {
-            OR: [
-              {
-                accountNumber: {
-                  contains: search.trim(),
-                  mode: "insensitive",
-                },
-              },
-              {
-                vendor: {
-                  shopName: {
-                    contains: search.trim(),
-                    mode: "insensitive",
-                  },
-                },
-              },
-              {
-                vendor: {
-                  user: {
-                    name: {
-                      contains: search.trim(),
-                      mode: "insensitive",
-                    },
-                  },
-                },
-              },
-            ],
-          }
-          : {}),
-      },
+    const skip = (currentPage - 1) * perPage;
 
-      include: {
-        vendor: {
-          select: {
-            id: true,
-            shopName: true,
-            shopLogo: true,
-            availableBalance: true,
-            totalWithdrawn: true,
+    /*
+     * ==========================================
+     * BUILD PAYOUT FILTER
+     * ==========================================
+     */
 
+    const where = {};
+
+    // STATUS
+    if (status && status !== "ALL") {
+      where.status = status;
+    }
+
+    // VENDOR
+    if (vendorId && vendorId !== "ALL") {
+      where.vendorId = vendorId;
+    }
+
+    // PAYMENT METHOD
+    if (paymentMethod && paymentMethod !== "ALL") {
+      where.paymentMethod = paymentMethod;
+    }
+
+    // DATE RANGE
+    if (dateFrom || dateTo) {
+      where.createdAt = {};
+
+      if (dateFrom) {
+        where.createdAt.gte = new Date(`${dateFrom}T00:00:00`);
+      }
+
+      if (dateTo) {
+        where.createdAt.lte = new Date(`${dateTo}T23:59:59.999`);
+      }
+    }
+
+    /*
+     * ==========================================
+     * SEARCH
+     *
+     * Search করবে:
+     * 1. Payout Request ID
+     * 2. Account Number
+     * 3. Transaction ID
+     * 4. Vendor Shop Name
+     * 5. Vendor Name
+     * 6. Vendor Email
+     * ==========================================
+     */
+
+    if (search?.trim()) {
+      const keyword = search.trim();
+
+      where.OR = [
+        {
+          id: {
+            contains: keyword,
+            mode: "insensitive",
+          },
+        },
+        {
+          accountNumber: {
+            contains: keyword,
+            mode: "insensitive",
+          },
+        },
+        {
+          transactionId: {
+            contains: keyword,
+            mode: "insensitive",
+          },
+        },
+        {
+          vendor: {
+            shopName: {
+              contains: keyword,
+              mode: "insensitive",
+            },
+          },
+        },
+        {
+          vendor: {
             user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                phone: true,
+              name: {
+                contains: keyword,
+                mode: "insensitive",
               },
             },
+          },
+        },
+        {
+          vendor: {
+            user: {
+              email: {
+                contains: keyword,
+                mode: "insensitive",
+              },
+            },
+          },
+        },
+      ];
+    }
+
+    /*
+     * ==========================================
+     * GET PAGINATED PAYOUTS
+     * ==========================================
+     */
+
+    const [payouts, total] = await Promise.all([
+      prisma.payoutRequest.findMany({
+        where,
+
+        include: {
+          vendor: {
+            select: {
+              id: true,
+              shopName: true,
+              shopLogo: true,
+              availableBalance: true,
+              totalWithdrawn: true,
+
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  phone: true,
+                },
+              },
+            },
+          },
+        },
+
+        orderBy: {
+          createdAt: "desc",
+        },
+
+        skip,
+        take: perPage,
+      }),
+
+      prisma.payoutRequest.count({
+        where,
+      }),
+    ]);
+
+    /*
+     * ==========================================
+     * FILTERED PAYOUT SUMMARY
+     * ==========================================
+     */
+
+    const payoutGroups = await prisma.payoutRequest.groupBy({
+      by: ["status"],
+
+      where,
+
+      _sum: {
+        amount: true,
+      },
+
+      _count: {
+        id: true,
+      },
+    });
+
+    const grouped = payoutGroups.reduce((result, item) => {
+      result[item.status] = {
+        amount: roundMoney(item._sum.amount || 0),
+        count: item._count.id || 0,
+      };
+
+      return result;
+    }, {});
+
+    /*
+     * ==========================================
+     * VENDOR AVAILABLE BALANCE
+     *
+     * Vendor filter থাকলে selected vendor.
+     * না থাকলে সব vendor.
+     * ==========================================
+     */
+
+    const vendorWhere =
+      vendorId && vendorId !== "ALL"
+        ? {
+            id: vendorId,
+          }
+        : {};
+
+    const vendorTotals = await prisma.vendor.aggregate({
+      where: vendorWhere,
+
+      _sum: {
+        availableBalance: true,
+      },
+    });
+
+    /*
+     * ==========================================
+     * PLATFORM COMMISSION
+     *
+     * Selected vendor থাকলে সেই vendor-এর
+     * completed order commission.
+     *
+     * না থাকলে সব vendor.
+     * ==========================================
+     */
+
+    const commissionWhere = {
+      itemStatus: "COMPLETED",
+
+      ...(vendorId && vendorId !== "ALL"
+        ? {
+            vendorId,
+          }
+        : {}),
+
+      ...(dateFrom || dateTo
+        ? {
+            completedAt: {
+              ...(dateFrom
+                ? {
+                    gte: new Date(
+                      `${dateFrom}T00:00:00`
+                    ),
+                  }
+                : {}),
+
+              ...(dateTo
+                ? {
+                    lte: new Date(
+                      `${dateTo}T23:59:59.999`
+                    ),
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    };
+
+    const commissionTotal =
+      await prisma.orderItem.aggregate({
+        where: commissionWhere,
+
+        _sum: {
+          commissionAmount: true,
+        },
+      });
+
+    /*
+     * ==========================================
+     * VENDOR DROPDOWN LIST
+     *
+     * সব active/approved vendor দেখাবে।
+     * Current payout filter দিয়ে vendor list
+     * restrict করা হবে না।
+     * ==========================================
+     */
+
+    const vendors = await prisma.vendor.findMany({
+      where: {
+        status: "APPROVED",
+      },
+
+      select: {
+        id: true,
+        shopName: true,
+
+        user: {
+          select: {
+            name: true,
+            email: true,
           },
         },
       },
 
       orderBy: {
-        createdAt: "desc",
+        shopName: "asc",
       },
     });
 
+    const totalPages = Math.ceil(
+      total / perPage
+    );
+
     return res.status(200).json({
       success: true,
+
       payouts,
+
+      vendors,
+
+      summary: {
+        vendorAvailableBalance: roundMoney(
+          vendorTotals._sum.availableBalance || 0
+        ),
+
+        pendingPayout: grouped.PENDING || {
+          amount: 0,
+          count: 0,
+        },
+
+        approvedPayout: grouped.APPROVED || {
+          amount: 0,
+          count: 0,
+        },
+
+        paidPayout: grouped.PAID || {
+          amount: 0,
+          count: 0,
+        },
+
+        rejectedPayout: grouped.REJECTED || {
+          amount: 0,
+          count: 0,
+        },
+
+        cancelledPayout: grouped.CANCELLED || {
+          amount: 0,
+          count: 0,
+        },
+
+        platformCommission: roundMoney(
+          commissionTotal._sum.commissionAmount || 0
+        ),
+      },
+
+      pagination: {
+        page: currentPage,
+        limit: perPage,
+        total,
+        totalPages,
+        hasNextPage: currentPage < totalPages,
+        hasPreviousPage: currentPage > 1,
+      },
     });
   } catch (error) {
-    console.error("Get all payout requests error:", error);
+    console.error(
+      "Get all payout requests error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,

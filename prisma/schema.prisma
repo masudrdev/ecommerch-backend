@@ -27,6 +27,7 @@ model User {
   refreshToken              String?
   activityLogs              ActivityLog[]
   cart                      Cart?
+  financeTransactions       FinanceTransaction[]
   notifications             Notification[]
   createdOrders             Order[]              @relation("OrderCreatedBy")
   orders                    Order[]
@@ -35,16 +36,15 @@ model User {
   approvedProducts          Product[]            @relation("ProductApprovedBy")
   products                  Product[]
   reviews                   Review[]
-  supportTicketsCreated     SupportTicket[]      @relation("SupportTicketCreatedBy")
+  supportActivities         SupportActivity[]
+  supportMessages           SupportMessage[]
   supportTicketsAssigned    SupportTicket[]      @relation("SupportTicketAssignedTo")
   supportTicketsEscalatedBy SupportTicket[]      @relation("SupportTicketEscalatedBy")
   supportTicketsEscalatedTo SupportTicket[]      @relation("SupportTicketEscalatedTo")
-  supportMessages           SupportMessage[]
-  supportActivities         SupportActivity[]
+  supportTicketsCreated     SupportTicket[]      @relation("SupportTicketCreatedBy")
   addresses                 UserAddress[]
   vendor                    Vendor?
   wishlists                 Wishlist[]
-  financeTransactions       FinanceTransaction[]
 }
 
 model OrderTimeline {
@@ -79,48 +79,36 @@ model UserAddress {
 }
 
 model SupportTicket {
-  id           String  @id @default(uuid())
-  ticketNumber String? @unique
-
-  userId String
-  user   User   @relation("SupportTicketCreatedBy", fields: [userId], references: [id], onDelete: Cascade)
-
-  subject     String
-  description String?
-  category    String?
-  priority    TicketPriority @default(MEDIUM)
-  status      TicketStatus   @default(OPEN)
-
-  orderId String?
-
-  assignedToId String?
-  assignedTo   User?   @relation("SupportTicketAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
-
-  escalatedById String?
-  escalatedBy   User?   @relation("SupportTicketEscalatedBy", fields: [escalatedById], references: [id], onDelete: SetNull)
-
-  escalatedToId String?
-  escalatedTo   User?   @relation("SupportTicketEscalatedTo", fields: [escalatedToId], references: [id], onDelete: SetNull)
-
+  id                String              @id @default(uuid())
+  userId            String
+  subject           String
+  category          String?
+  status            TicketStatus        @default(OPEN)
+  orderId           String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  assignedToId      String?
+  closedAt          DateTime?
+  customerFeedback  String?
+  customerRating    Int?
+  description       String?
+  escalatedById     String?
+  escalatedToId     String?
   escalationReason  String?
+  firstResponseAt   DateTime?
+  isArchived        Boolean             @default(false)
+  lastActivityAt    DateTime            @default(now())
+  priority          TicketPriority      @default(MEDIUM)
   resolutionSummary String?
-
-  firstResponseAt DateTime?
-  resolvedAt      DateTime?
-  closedAt        DateTime?
-  lastActivityAt  DateTime  @default(now())
-
-  customerRating   Int?
-  customerFeedback String?
-
-  isArchived Boolean @default(false)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  messages    SupportMessage[]
-  attachments SupportAttachment[]
-  activities  SupportActivity[]
+  resolvedAt        DateTime?
+  ticketNumber      String?             @unique
+  activities        SupportActivity[]
+  attachments       SupportAttachment[]
+  messages          SupportMessage[]
+  assignedTo        User?               @relation("SupportTicketAssignedTo", fields: [assignedToId], references: [id])
+  escalatedBy       User?               @relation("SupportTicketEscalatedBy", fields: [escalatedById], references: [id])
+  escalatedTo       User?               @relation("SupportTicketEscalatedTo", fields: [escalatedToId], references: [id])
+  user              User                @relation("SupportTicketCreatedBy", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([assignedToId])
@@ -133,21 +121,17 @@ model SupportTicket {
 }
 
 model SupportMessage {
-  id       String @id @default(uuid())
-  ticketId String
-  senderId String
-
-  message    String
-  isInternal Boolean @default(false)
-  isEdited   Boolean @default(false)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-
-  sender User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-
+  id          String              @id @default(uuid())
+  ticketId    String
+  senderId    String
+  message     String
+  createdAt   DateTime            @default(now())
+  isEdited    Boolean             @default(false)
+  isInternal  Boolean             @default(false)
+  updatedAt   DateTime            @default(now()) @updatedAt
   attachments SupportAttachment[]
+  sender      User                @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  ticket      SupportTicket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   @@index([ticketId])
   @@index([senderId])
@@ -155,42 +139,33 @@ model SupportMessage {
 }
 
 model SupportAttachment {
-  id String @id @default(uuid())
-
-  ticketId  String
-  messageId String?
-
-  fileName String
-  fileUrl  String
-  fileType String?
-  fileSize Int?
-
-  isSensitive Boolean @default(false)
-
-  createdAt DateTime @default(now())
-
-  ticket  SupportTicket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  message SupportMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  id          String          @id @default(uuid())
+  ticketId    String
+  messageId   String?
+  fileName    String
+  fileUrl     String
+  fileType    String?
+  fileSize    Int?
+  isSensitive Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  message     SupportMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  ticket      SupportTicket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   @@index([ticketId])
   @@index([messageId])
 }
 
 model SupportActivity {
-  id String @id @default(uuid())
-
-  ticketId String
-  userId   String?
-
-  action   SupportActivityType
-  details  String?
-  oldValue String?
-  newValue String?
-
-  createdAt DateTime @default(now())
-
-  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  user   User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  id        String              @id @default(uuid())
+  ticketId  String
+  userId    String?
+  action    SupportActivityType
+  details   String?
+  oldValue  String?
+  newValue  String?
+  createdAt DateTime            @default(now())
+  ticket    SupportTicket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user      User?               @relation(fields: [userId], references: [id])
 
   @@index([ticketId])
   @@index([userId])
@@ -212,11 +187,11 @@ model Vendor {
   totalWithdrawn         Float                @default(0)
   defaultCommissionType  CommissionType?
   defaultCommissionValue Float?
+  financeTransactions    FinanceTransaction[]
   orders                 OrderItem[]
   orderNotes             OrderNote[]
   payouts                PayoutRequest[]
   products               Product[]
-  financeTransactions    FinanceTransaction[]
   user                   User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
@@ -356,8 +331,6 @@ model OrderItem {
   price             Float
   size              String?
   color             String?
-  deliveryCharge    Float           @default(0)
-  shippedAt         DateTime?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @default(now()) @updatedAt
   stockReduced      Boolean         @default(false)
@@ -372,6 +345,8 @@ model OrderItem {
   completedAt       DateTime?
   returnRequestedAt DateTime?
   returnResolvedAt  DateTime?
+  deliveryCharge    Float           @default(0)
+  shippedAt         DateTime?
   order             Order           @relation(fields: [orderId], references: [id])
   product           Product         @relation(fields: [productId], references: [id])
   vendor            Vendor          @relation(fields: [vendorId], references: [id])
@@ -447,31 +422,25 @@ model ActivityLog {
 }
 
 model PayoutRequest {
-  id       String       @id @default(uuid())
-  vendorId String
-  amount   Float
-  status   PayoutStatus @default(PENDING)
-
-  paymentMethod String
-  accountName   String?
-  accountNumber String
-
-  vendorNote      String?
+  id              String       @id @default(uuid())
+  vendorId        String
+  amount          Float
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  accountName     String?
+  accountNumber   String
   adminNote       String?
-  transactionId   String?
+  approvedAt      DateTime?
+  paidAt          DateTime?
+  rejectedAt      DateTime?
   rejectionReason String?
-
-  approvedAt  DateTime?
-  paidAt      DateTime?
-  rejectedAt  DateTime?
-  cancelledAt DateTime?
-
-  processedById String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  transactionId   String?
+  vendorNote      String?
+  status          PayoutStatus @default(PENDING)
+  cancelledAt     DateTime?
+  processedById   String?
+  paymentMethod   String
+  vendor          Vendor       @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 
   @@index([vendorId])
   @@index([status])
@@ -479,26 +448,17 @@ model PayoutRequest {
 }
 
 model FinanceTransaction {
-  id String @id @default(uuid())
-
-  type FinanceTransactionType
-
-  amount Float
-
-  status FinanceTransactionStatus @default(COMPLETED)
-
+  id          String                   @id @default(uuid())
+  type        FinanceTransactionType
+  amount      Float
+  status      FinanceTransactionStatus @default(COMPLETED)
   referenceId String?
-
   description String?
-
-  vendorId String?
-  userId   String?
-
-  createdAt DateTime @default(now())
-
-  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  vendorId    String?
+  userId      String?
+  createdAt   DateTime                 @default(now())
+  user        User?                    @relation(fields: [userId], references: [id])
+  vendor      Vendor?                  @relation(fields: [vendorId], references: [id])
 
   @@index([type])
   @@index([vendorId])
@@ -549,25 +509,15 @@ enum CommissionType {
 
 enum FinanceTransactionType {
   ORDER_PAYMENT
-
   COMMISSION
-
   VENDOR_EARNING
-
   PAYOUT
-
-  REFUND
-
-  ADJUSTMENT
 }
 
 enum FinanceTransactionStatus {
-  COMPLETED
-
   PENDING
-
+  COMPLETED
   FAILED
-
   CANCELLED
 }
 
@@ -617,18 +567,19 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   UNPAID
+  PARTIALLY_PAID
   PAID
 }
 
 enum TicketStatus {
   OPEN
   PENDING
+  RESOLVED
+  CLOSED
   IN_PROGRESS
   WAITING_FOR_CUSTOMER
   WAITING_FOR_STAFF
   ESCALATED
-  RESOLVED
-  CLOSED
   REJECTED
 }
 
