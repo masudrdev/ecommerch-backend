@@ -8,13 +8,32 @@ export const getVendorEarnings = async (req, res) => {
 
     const limit = Number(req.query.limit) || 20;
 
+    const search = String(req.query.search || "").trim();
+
+    const vendorId = String(req.query.vendorId || "").trim();
+
     const skip = (page - 1) * limit;
 
 
 
-    const where = {
-      itemStatus: "COMPLETED",
-    };
+    const filters = [{ itemStatus: "COMPLETED" }];
+
+    if (vendorId) {
+      filters.push({ vendorId });
+    }
+
+    if (search) {
+      filters.push({
+        OR: [
+          { order: { orderNumber: { contains: search, mode: "insensitive" } } },
+          { order: { customerName: { contains: search, mode: "insensitive" } } },
+          { product: { name: { contains: search, mode: "insensitive" } } },
+          { vendor: { user: { username: { contains: search, mode: "insensitive" } } } },
+        ],
+      });
+    }
+
+    const where = filters.length === 1 ? filters[0] : { AND: filters };
 
 
 
@@ -39,8 +58,11 @@ export const getVendorEarnings = async (req, res) => {
           select: {
             id: true,
             shopName: true,
-            availableBalance: true,
-            totalWithdrawn: true,
+            user: {
+              select: {
+                username: true,
+              },
+            },
           },
         },
 
@@ -56,6 +78,9 @@ export const getVendorEarnings = async (req, res) => {
         order: {
           select: {
             orderNumber: true,
+            customerName: true,
+            paymentStatus: true,
+            orderStatus: true,
             createdAt: true,
           },
         },
@@ -186,6 +211,22 @@ export const getVendorEarnings = async (req, res) => {
 
 
 
+    const vendorOptions = await prisma.vendor.findMany({
+      select: {
+        id: true,
+        user: {
+          select: {
+            username: true,
+          },
+        },
+      },
+      orderBy: {
+        user: {
+          username: "asc",
+        },
+      },
+    });
+
     const vendors = {};
 
 
@@ -253,11 +294,6 @@ export const getVendorEarnings = async (req, res) => {
     });
 
 
-
-
-
-
-
     res.json({
 
       success:true,
@@ -281,8 +317,10 @@ export const getVendorEarnings = async (req, res) => {
       summary,
 
 
-      vendors:
-        Object.values(vendors),
+      vendors: vendorOptions.map((vendor) => ({
+        id: vendor.id,
+        username: vendor.user.username,
+      })),
 
 
 
@@ -293,8 +331,12 @@ export const getVendorEarnings = async (req, res) => {
             item.order.orderNumber,
 
 
-          vendor:
-            item.vendor.shopName,
+          customer:
+            item.order.customerName,
+
+
+          vendorUsername:
+            item.vendor.user.username,
 
 
           product:
@@ -319,6 +361,14 @@ export const getVendorEarnings = async (req, res) => {
 
           vendorEarning:
             item.vendorEarning || 0,
+
+
+          paymentStatus:
+            item.order.paymentStatus,
+
+
+          orderStatus:
+            item.order.orderStatus,
 
 
 
@@ -365,13 +415,62 @@ export const getRevenue = async (req, res) => {
 
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
+    const search = String(req.query.search || "").trim();
+    const vendorId = String(req.query.vendorId || "").trim();
 
     const skip = (page - 1) * limit;
 
+    const filters = [{ itemStatus: "COMPLETED" }];
 
-    const where = {
-      itemStatus: "COMPLETED",
-    };
+    if (vendorId) {
+      filters.push({ vendorId });
+    }
+
+    if (search) {
+      filters.push({
+        OR: [
+          {
+            order: {
+              orderNumber: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+          },
+          {
+            order: {
+              customerName: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+          },
+          {
+            product: {
+              name: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+          },
+          {
+            vendor: {
+              user: {
+                username: {
+                  contains: search,
+                  mode: "insensitive",
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    const where =
+      filters.length === 1
+        ? filters[0]
+        : { AND: filters };
 
 
     const total =
@@ -395,7 +494,12 @@ export const getRevenue = async (req, res) => {
 
           vendor: {
             select: {
-              shopName: true,
+              id: true,
+              user: {
+                select: {
+                  username: true,
+                },
+              },
             },
           },
 
@@ -442,6 +546,8 @@ export const getRevenue = async (req, res) => {
 
           quantity:true,
 
+          commissionAmount:true,
+
           createdAt:true,
 
         },
@@ -458,13 +564,17 @@ export const getRevenue = async (req, res) => {
         (acc,item)=>{
 
 
-          const sale =
+          const saleAmount =
             Number(item.price || 0) *
             Number(item.quantity || 1);
 
+          const revenueAmount =
+            saleAmount -
+            Number(item.commissionAmount || 0);
 
 
-          acc.totalRevenue += sale;
+
+          acc.totalRevenue += revenueAmount;
 
 
 
@@ -483,7 +593,7 @@ export const getRevenue = async (req, res) => {
             today.toDateString()
           ){
 
-            acc.todayRevenue += sale;
+            acc.todayRevenue += revenueAmount;
 
           }
 
@@ -496,7 +606,7 @@ export const getRevenue = async (req, res) => {
             date.getFullYear() === today.getFullYear()
           ){
 
-            acc.monthlyRevenue += sale;
+            acc.monthlyRevenue += revenueAmount;
 
           }
 
@@ -526,6 +636,29 @@ export const getRevenue = async (req, res) => {
 
       );
 
+    const vendors = await prisma.vendor.findMany({
+      where: {
+        orders: {
+          some: {
+            itemStatus: "COMPLETED",
+          },
+        },
+      },
+      select: {
+        id: true,
+        user: {
+          select: {
+            username: true,
+          },
+        },
+      },
+      orderBy: {
+        user: {
+          username: "asc",
+        },
+      },
+    });
+
 
 
 
@@ -553,10 +686,24 @@ export const getRevenue = async (req, res) => {
 
       summary,
 
+      vendors: vendors.map((vendor) => ({
+        id: vendor.id,
+        username: vendor.user.username,
+      })),
+
 
 
       items:
-        items.map(item=>({
+        items.map(item=>{
+
+          const saleAmount =
+            Number(item.price || 0) *
+            Number(item.quantity || 1);
+
+          const platformCommission =
+            Number(item.commissionAmount || 0);
+
+          return {
 
           orderId:
             item.order.orderNumber,
@@ -566,17 +713,20 @@ export const getRevenue = async (req, res) => {
             item.order.customerName,
 
 
-          vendor:
-            item.vendor.shopName,
+          vendorUsername:
+            item.vendor.user.username,
 
 
           product:
             item.product.name,
 
 
-          saleAmount:
-            Number(item.price || 0) *
-            Number(item.quantity || 1),
+          saleAmount,
+
+          platformCommission,
+
+          revenueAmount:
+            saleAmount - platformCommission,
 
 
           paymentStatus:
@@ -590,7 +740,9 @@ export const getRevenue = async (req, res) => {
           date:
             item.createdAt,
 
-        })),
+        };
+
+        }),
 
 
     });
@@ -623,13 +775,45 @@ export const getCommission = async (req, res) => {
 
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
+    const search = String(req.query.search || "").trim();
+    const vendorId = String(req.query.vendorId || "").trim();
 
     const skip = (page - 1) * limit;
 
+    const filters = [{ itemStatus: "COMPLETED" }];
 
-    const where = {
-      itemStatus: "COMPLETED",
-    };
+    if (vendorId) {
+      filters.push({ vendorId });
+    }
+
+    if (search) {
+      filters.push({
+        OR: [
+          { order: { orderNumber: { contains: search, mode: "insensitive" } } },
+          { order: { customerName: { contains: search, mode: "insensitive" } } },
+          { product: { name: { contains: search, mode: "insensitive" } } },
+          { vendor: { user: { username: { contains: search, mode: "insensitive" } } } },
+        ],
+      });
+    }
+
+    const where = filters.length === 1 ? filters[0] : { AND: filters };
+
+    const vendors = await prisma.vendor.findMany({
+      select: {
+        id: true,
+        user: {
+          select: {
+            username: true,
+          },
+        },
+      },
+      orderBy: {
+        user: {
+          username: "asc",
+        },
+      },
+    });
 
 
 
@@ -655,7 +839,11 @@ export const getCommission = async (req, res) => {
 
           vendor:{
             select:{
-              shopName:true,
+              user:{
+                select:{
+                  username:true,
+                },
+              },
             },
           },
 
@@ -670,6 +858,9 @@ export const getCommission = async (req, res) => {
           order:{
             select:{
               orderNumber:true,
+              customerName:true,
+              paymentStatus:true,
+              orderStatus:true,
               createdAt:true,
             },
           },
@@ -817,6 +1008,12 @@ export const getCommission = async (req, res) => {
 
 
 
+      vendors: vendors.map((vendor) => ({
+        id: vendor.id,
+        username: vendor.user.username,
+      })),
+
+
       items:
         items.map(item=>({
 
@@ -824,8 +1021,12 @@ export const getCommission = async (req, res) => {
             item.order.orderNumber,
 
 
-          vendor:
-            item.vendor.shopName,
+          customer:
+            item.order.customerName,
+
+
+          vendorUsername:
+            item.vendor.user.username,
 
 
           product:
@@ -854,6 +1055,14 @@ export const getCommission = async (req, res) => {
 
           platformEarning:
             item.platformEarning || 0,
+
+
+          paymentStatus:
+            item.order.paymentStatus,
+
+
+          orderStatus:
+            item.order.orderStatus,
 
 
 
@@ -891,18 +1100,38 @@ export const getPayoutReports = async (req, res) => {
 
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
+    const search = String(req.query.search || "").trim();
+    const vendorId = String(req.query.vendorId || "").trim();
 
     const skip = (page - 1) * limit;
 
+    const filters = [];
 
+    if (vendorId) {
+      filters.push({ vendorId });
+    }
+
+    if (search) {
+      filters.push({
+        OR: [
+          { id: { contains: search, mode: "insensitive" } },
+          { transactionId: { contains: search, mode: "insensitive" } },
+          { vendor: { user: { username: { contains: search, mode: "insensitive" } } } },
+        ],
+      });
+    }
+
+    const where = filters.length ? { AND: filters } : {};
 
     const total =
-      await prisma.payoutRequest.count();
+      await prisma.payoutRequest.count({ where });
 
 
 
     const payouts =
       await prisma.payoutRequest.findMany({
+
+        where,
 
         skip,
 
@@ -915,7 +1144,11 @@ export const getPayoutReports = async (req, res) => {
 
             select: {
 
-              shopName: true,
+              user: {
+                select: {
+                  username: true,
+                },
+              },
 
             },
 
@@ -940,6 +1173,8 @@ export const getPayoutReports = async (req, res) => {
 
     const allPayouts =
       await prisma.payoutRequest.findMany({
+
+        where,
 
         select: {
 
@@ -1050,6 +1285,22 @@ export const getPayoutReports = async (req, res) => {
 
 
 
+    const vendors = await prisma.vendor.findMany({
+      select: {
+        id: true,
+        user: {
+          select: {
+            username: true,
+          },
+        },
+      },
+      orderBy: {
+        user: {
+          username: "asc",
+        },
+      },
+    });
+
     res.json({
 
       success:true,
@@ -1073,6 +1324,12 @@ export const getPayoutReports = async (req, res) => {
       summary,
 
 
+      vendors: vendors.map((vendor) => ({
+        id: vendor.id,
+        username: vendor.user.username,
+      })),
+
+
 
       payouts:
 
@@ -1081,8 +1338,8 @@ export const getPayoutReports = async (req, res) => {
           id:item.id,
 
 
-          vendor:
-            item.vendor.shopName,
+          vendorUsername:
+            item.vendor.user.username,
 
 
           amount:
@@ -1153,164 +1410,83 @@ export const getPayoutReports = async (req, res) => {
 };
 export const getTransactions = async (req, res) => {
   try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const search = String(req.query.search || "").trim();
+    const vendorId = String(req.query.vendorId || "").trim();
+    const type = String(req.query.type || "").trim().toUpperCase();
+    const skip = (page - 1) * limit;
 
-    const page =
-      Number(req.query.page) || 1;
+    const itemFilters = [{ itemStatus: { not: "CANCELLED" } }];
 
-    const limit =
-      Number(req.query.limit) || 20;
-
-    const skip =
-      (page - 1) * limit;
-
-
-    const type =
-      req.query.type || "";
-
-
-    const where = {
-
-      ...(type
-        ? {
-            type,
-          }
-        : {}),
-
-    };
-
-
-    const total =
-      await prisma.financeTransaction.count({
-        where,
-      });
-
-
-    const transactions =
-      await prisma.financeTransaction.findMany({
-
-        where,
-
-        skip,
-
-        take: limit,
-
-
-        include: {
-
-          vendor: {
-            select: {
-              id: true,
-              shopName: true,
-            },
-          },
-
-
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-
-        },
-
-
-        orderBy: {
-          createdAt: "desc",
-        },
-
-      });
-
-
-
-    const summary =
-      await prisma.financeTransaction.groupBy({
-
-        by:[
-          "type"
+    if (vendorId) itemFilters.push({ vendorId });
+    if (type === "COMPLETE") itemFilters.push({ itemStatus: "COMPLETED" });
+    if (type === "UNCOMPLETE") itemFilters.push({ itemStatus: { notIn: ["COMPLETED", "CANCELLED"] } });
+    if (search) {
+      itemFilters.push({
+        OR: [
+          { order: { orderNumber: { contains: search, mode: "insensitive" } } },
+          { order: { customerName: { contains: search, mode: "insensitive" } } },
+          { product: { name: { contains: search, mode: "insensitive" } } },
+          { vendor: { user: { username: { contains: search, mode: "insensitive" } } } },
         ],
-
-        where,
-
-
-        _sum:{
-          amount:true,
-        },
-
-        _count:{
-          id:true,
-        },
-
       });
+    }
 
+    const where = itemFilters.length === 1 ? itemFilters[0] : { AND: itemFilters };
+    const [total, orderItems, allItems, vendors] = await Promise.all([
+      prisma.orderItem.count({ where }),
+      prisma.orderItem.findMany({
+        where,
+        skip,
+        take: limit,
+        include: {
+          vendor: { select: { user: { select: { username: true } } } },
+          product: { select: { name: true } },
+          order: { select: { id: true, orderNumber: true, customerName: true, paymentStatus: true, orderStatus: true, createdAt: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.orderItem.findMany({
+        where,
+        select: { price: true, quantity: true, itemStatus: true, commissionAmount: true, vendorEarning: true },
+      }),
+      prisma.vendor.findMany({
+        select: { id: true, user: { select: { username: true } } },
+        orderBy: { user: { username: "asc" } },
+      }),
+    ]);
 
+    const summary = allItems.reduce((acc, item) => {
+      const saleAmount = Number(item.price || 0) * Number(item.quantity || 1);
+      acc.totalAmount += saleAmount;
+      acc.totalTransactions += 1;
+      if (item.itemStatus === "COMPLETED") {
+        acc.commission += Number(item.commissionAmount || 0);
+        acc.vendorEarnings += Number(item.vendorEarning || 0);
+      }
+      return acc;
+    }, { totalTransactions: 0, totalAmount: 0, commission: 0, vendorEarnings: 0 });
 
     return res.json({
-
-      success:true,
-
-
-      pagination:{
-
-        page,
-
-        limit,
-
-        total,
-
-        totalPages:
-          Math.ceil(
-            total / limit
-          ),
-
-      },
-
-
+      success: true,
+      pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1) },
       summary,
-
-
-      transactions:
-
-        transactions.map(item => ({
-
-          id:item.id,
-
-
-          type:item.type,
-
-
-          amount:
-            item.amount,
-
-
-          status:
-            item.status,
-
-
-          referenceId:
-            item.referenceId,
-
-
-          vendor:
-            item.vendor?.shopName || null,
-
-
-          user:
-            item.user?.name || null,
-
-
-          description:
-            item.description,
-
-
-          date:
-            item.createdAt,
-
-
-        })),
-
-
+      vendors: vendors.map((vendor) => ({ id: vendor.id, username: vendor.user.username })),
+      transactions: orderItems.map((item) => ({
+        id: item.id,
+        orderId: item.order.id,
+        orderNumber: item.order.orderNumber,
+        customer: item.order.customerName,
+        vendorUsername: item.vendor.user.username,
+        product: item.product.name,
+        amount: Number(item.price || 0) * Number(item.quantity || 1),
+        commission: Number(item.commissionAmount || 0),
+        vendorEarning: Number(item.vendorEarning || 0),
+        paymentStatus: item.order.paymentStatus,
+        orderStatus: item.itemStatus,
+        date: item.createdAt,
+      })),
     });
 
 

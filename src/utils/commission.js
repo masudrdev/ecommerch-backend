@@ -124,7 +124,13 @@ export const getEffectiveCommission = ({
     vendor?.defaultCommissionValue
   );
 
+  const vendorCommissionIsEffective =
+    vendor?.defaultCommissionActive !== false &&
+    (!vendor?.defaultCommissionEffectiveFrom ||
+      new Date(vendor.defaultCommissionEffectiveFrom) <= new Date());
+
   if (
+    vendorCommissionIsEffective &&
     VALID_COMMISSION_TYPES.includes(vendor?.defaultCommissionType) &&
     vendorCommissionValue !== null
   ) {

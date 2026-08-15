@@ -187,6 +187,8 @@ model Vendor {
   totalWithdrawn         Float                @default(0)
   defaultCommissionType  CommissionType?
   defaultCommissionValue Float?
+  defaultCommissionActive Boolean              @default(true)
+  defaultCommissionEffectiveFrom DateTime?
   financeTransactions    FinanceTransaction[]
   orders                 OrderItem[]
   orderNotes             OrderNote[]
@@ -225,6 +227,9 @@ model Product {
   description                String?
   price                      Float
   salePrice                  Float?
+  isFeatured                Boolean          @default(false)
+  flashSaleStart            DateTime?
+  flashSaleEnd              DateTime?
   stock                      Int              @default(0)
   status                     ProductStatus    @default(PENDING)
   vendorId                   String

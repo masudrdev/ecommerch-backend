@@ -18,6 +18,7 @@ import supportRoutes from "./routes/support.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import addressRoutes from "./routes/address.routes.js";
 import financeRoutes from "./routes/finance.routes.js";
+import userManagementRoutes from "./routes/userManagement.routes.js";
 
 
 dotenv.config();
@@ -39,6 +40,7 @@ app.get("/", (req, res) => {
   });
 });
 app.use("/api/finance", financeRoutes);
+app.use("/api/user-management", userManagementRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);

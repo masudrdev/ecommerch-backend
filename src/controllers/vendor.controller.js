@@ -560,9 +560,12 @@ export const getAllVendors = async (req, res) => {
           select: {
             id: true,
             name: true,
+            username: true,
             email: true,
             phone: true,
             status: true,
+            isEmailVerified: true,
+            createdAt: true,
           },
         },
         _count: {

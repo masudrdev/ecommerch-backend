@@ -313,13 +313,14 @@ export const createOrder = async (req, res) => {
         });
       }
 
-      if (
-        !product.commissionType ||
-        product.commissionValue ===
-          null ||
-        product.commissionValue ===
-          undefined
-      ) {
+      const commissionType = product.commissionType ||
+        (product.vendor?.defaultCommissionActive !== false && (!product.vendor?.defaultCommissionEffectiveFrom || product.vendor.defaultCommissionEffectiveFrom <= new Date())
+          ? product.vendor?.defaultCommissionType : null);
+      const commissionValue = product.commissionValue ??
+        (product.vendor?.defaultCommissionActive !== false && (!product.vendor?.defaultCommissionEffectiveFrom || product.vendor.defaultCommissionEffectiveFrom <= new Date())
+          ? product.vendor?.defaultCommissionValue : null);
+
+      if (!commissionType || commissionValue === null || commissionValue === undefined) {
         return res.status(400).json({
           success: false,
           message: `${product.name} does not have an approved commission`,
@@ -372,11 +373,9 @@ export const createOrder = async (req, res) => {
           price,
           quantity,
 
-          commissionType:
-            product.commissionType,
+          commissionType,
 
-          commissionValue:
-            product.commissionValue,
+          commissionValue,
         });
 
       productTotal += subtotal;
@@ -1770,6 +1769,7 @@ export const createManualOrder = async (req, res) => {
     for (const item of items) {
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
+        include: { vendor: true },
       });
 
       if (!product || product.status !== "APPROVED") {
@@ -1789,11 +1789,14 @@ export const createManualOrder = async (req, res) => {
 const price =
   product.salePrice || product.price;
 
-if (
-  !product.commissionType ||
-  product.commissionValue === null ||
-  product.commissionValue === undefined
-) {
+const commissionType = product.commissionType ||
+  (product.vendor?.defaultCommissionActive !== false && (!product.vendor?.defaultCommissionEffectiveFrom || product.vendor.defaultCommissionEffectiveFrom <= new Date())
+    ? product.vendor?.defaultCommissionType : null);
+const commissionValue = product.commissionValue ??
+  (product.vendor?.defaultCommissionActive !== false && (!product.vendor?.defaultCommissionEffectiveFrom || product.vendor.defaultCommissionEffectiveFrom <= new Date())
+    ? product.vendor?.defaultCommissionValue : null);
+
+if (!commissionType || commissionValue === null || commissionValue === undefined) {
   return res.status(400).json({
     success: false,
     message: `${product.name} does not have an approved commission`,
@@ -1804,10 +1807,8 @@ const commission =
   calculateCommissionSnapshot({
     price,
     quantity: item.quantity,
-    commissionType:
-      product.commissionType,
-    commissionValue:
-      product.commissionValue,
+    commissionType,
+    commissionValue,
   });
 
 totalAmount += commission.subtotal;
@@ -2500,6 +2501,25 @@ const syncMainOrderStatusFromItems = async (
     (status) => status === statuses[0]
   );
 
+  const completedItemCount = statuses.filter(
+    (status) => status === "COMPLETED"
+  ).length;
+
+  const cancelledItemCount = statuses.filter(
+    (status) => status === "CANCELLED"
+  ).length;
+
+  let newPaymentStatus = "UNPAID";
+
+  if (completedItemCount > 0) {
+    const allItemsSettled =
+      completedItemCount + cancelledItemCount === statuses.length;
+
+    newPaymentStatus = allItemsSettled
+      ? "PAID"
+      : "PARTIALLY_PAID";
+  }
+
   let newOrderStatus = "PENDING";
 
   if (allSame) {
@@ -2550,6 +2570,11 @@ const syncMainOrderStatusFromItems = async (
     data: {
       orderStatus:
         newOrderStatus,
+
+      // completed + active items = PARTIALLY_PAID;
+      // completed + cancelled items only = PAID;
+      // all cancelled = UNPAID.
+      paymentStatus: newPaymentStatus,
 
       /*
        * সব applicable item delivery charge-এর total।
