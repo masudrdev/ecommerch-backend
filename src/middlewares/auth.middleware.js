@@ -1,5 +1,6 @@
-import jwt from "jsonwebtoken";
+﻿import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma.js";
+import { captureActivitySnapshot } from "./activityAudit.middleware.js";
 
 export const protect = async (req, res, next) => {
   try {
@@ -27,6 +28,9 @@ export const protect = async (req, res, next) => {
         status: true,
       },
     });
+    if (!user) {
+      return res.status(401).json({ success: false, message: "User not found" });
+    }
     if (user.status !== "ACTIVE") {
   return res.status(403).json({
     success: false,
@@ -34,14 +38,10 @@ export const protect = async (req, res, next) => {
   });
 }
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "User not found",
-      });
-    }
+
 
     req.user = user;
+    await captureActivitySnapshot(req);
     next();
   } catch (error) {
     return res.status(401).json({

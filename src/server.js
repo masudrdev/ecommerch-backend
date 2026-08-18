@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import authRoutes from "./routes/auth.routes.js";
@@ -19,6 +19,7 @@ import dashboardRoutes from "./routes/dashboard.routes.js";
 import addressRoutes from "./routes/address.routes.js";
 import financeRoutes from "./routes/finance.routes.js";
 import userManagementRoutes from "./routes/userManagement.routes.js";
+import { activityAudit } from "./middlewares/activityAudit.middleware.js";
 
 
 dotenv.config();
@@ -32,6 +33,7 @@ app.use(
   })
 );
 app.use(express.json());
+app.use(activityAudit);
 
 app.get("/", (req, res) => {
   res.json({

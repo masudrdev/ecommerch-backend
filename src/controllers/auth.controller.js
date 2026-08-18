@@ -1,8 +1,9 @@
-import bcrypt from "bcryptjs";
+﻿import bcrypt from "bcryptjs";
 import sendVerificationEmail from "../utils/sendVerificationEmail.js";
 import prisma from "../lib/prisma.js";
 import jwt from "jsonwebtoken";
 import generateCode from "../utils/generateCode.js";
+import createActivityLog from "../utils/createActivityLog.js";
 import {
   registerSchema,
   loginSchema,
@@ -190,6 +191,7 @@ export const login = async (req, res) => {
     const isPasswordMatch = await bcrypt.compare(data.password, user.password);
 
     if (!isPasswordMatch) {
+      if (["SUPER_ADMIN", "ADMIN", "SUPPORT_AGENT"].includes(user.role)) await createActivityLog({ userId: user.id, action: "LOGIN", module: "AUTH", entityType: "USER", entityId: user.id, targetName: user.email, status: "FAILED", description: "Invalid password", req });
       return res.status(400).json({
         success: false,
         message: "Invalid email/username or password",
@@ -231,6 +233,7 @@ export const login = async (req, res) => {
   where: { id: user.id },
   data: { refreshToken },
 });
+    if (["SUPER_ADMIN", "ADMIN", "SUPPORT_AGENT"].includes(user.role)) await createActivityLog({ userId: user.id, action: "LOGIN", module: "AUTH", entityType: "USER", entityId: user.id, targetName: user.email, description: "Staff login successful", req });
 
     return res.status(200).json({
       success: true,

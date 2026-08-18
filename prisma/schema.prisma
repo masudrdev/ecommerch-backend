@@ -227,9 +227,6 @@ model Product {
   description                String?
   price                      Float
   salePrice                  Float?
-  isFeatured                Boolean          @default(false)
-  flashSaleStart            DateTime?
-  flashSaleEnd              DateTime?
   stock                      Int              @default(0)
   status                     ProductStatus    @default(PENDING)
   vendorId                   String
@@ -413,19 +410,28 @@ model Notification {
 }
 
 model ActivityLog {
-  id         String   @id @default(uuid())
-  userId     String?
-  action     String
-  entityType String?
-  entityId   String?
-  oldData    Json?
-  newData    Json?
-  ipAddress  String?
-  userAgent  String?
-  createdAt  DateTime @default(now())
-  user       User?    @relation(fields: [userId], references: [id])
-}
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String
+  module      String?
+  entityType  String?
+  entityId    String?
+  targetName  String?
+  status      String   @default("SUCCESS")
+  description String?
+  oldData     Json?
+  newData     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+  user        User?    @relation(fields: [userId], references: [id])
 
+  @@index([createdAt])
+  @@index([userId])
+  @@index([module])
+  @@index([action])
+  @@index([status])
+}
 model PayoutRequest {
   id              String       @id @default(uuid())
   vendorId        String

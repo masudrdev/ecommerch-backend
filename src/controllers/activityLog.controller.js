@@ -1,32 +1,13 @@
 import prisma from "../lib/prisma.js";
-
+const pageNumber = (value, fallback) => Math.max(Number.parseInt(value, 10) || fallback, 1);
 export const getActivityLogs = async (req, res) => {
   try {
-    const logs = await prisma.activityLog.findMany({
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            username: true,
-            email: true,
-            role: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-
-    res.json({
-      success: true,
-      logs,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+    const { search = "", actorId, module, action, status, dateFrom, dateTo } = req.query;
+    const page = pageNumber(req.query.page, 1); const limit = Math.min(pageNumber(req.query.limit, 25), 100);
+    const term = String(search).trim();
+    const where = { ...(actorId && actorId !== "ALL" ? { userId: actorId } : {}), ...(module && module !== "ALL" ? { module } : {}), ...(action && action !== "ALL" ? { action } : {}), ...(status && status !== "ALL" ? { status } : {}), ...(dateFrom || dateTo ? { createdAt: { ...(dateFrom ? { gte: new Date(`${dateFrom}T00:00:00.000Z`) } : {}), ...(dateTo ? { lte: new Date(`${dateTo}T23:59:59.999Z`) } : {}) } } : {}), ...(term ? { OR: [{ action: { contains: term, mode: "insensitive" } }, { module: { contains: term, mode: "insensitive" } }, { entityType: { contains: term, mode: "insensitive" } }, { entityId: { contains: term, mode: "insensitive" } }, { targetName: { contains: term, mode: "insensitive" } }, { user: { is: { OR: [{ name: { contains: term, mode: "insensitive" } }, { email: { contains: term, mode: "insensitive" } }, { username: { contains: term, mode: "insensitive" } }] } } }] } : {}) };
+    const [logs, total, actors, modules, actions] = await Promise.all([prisma.activityLog.findMany({ where, include: { user: { select: { id: true, name: true, username: true, email: true, role: true } } }, orderBy: { createdAt: "desc" }, skip: (page - 1) * limit, take: limit }), prisma.activityLog.count({ where }), prisma.user.findMany({ where: { activityLogs: { some: {} } }, select: { id: true, name: true, username: true, email: true, role: true }, orderBy: { name: "asc" } }), prisma.activityLog.findMany({ distinct: ["module"], where: { module: { not: null } }, select: { module: true }, orderBy: { module: "asc" } }), prisma.activityLog.findMany({ distinct: ["action"], select: { action: true }, orderBy: { action: "asc" } })]);
+    return res.json({ success: true, logs, filters: { actors, modules: modules.map((item) => item.module), actions: actions.map((item) => item.action), statuses: ["SUCCESS", "FAILED"] }, pagination: { page, limit, total, totalPages: Math.max(Math.ceil(total / limit), 1), hasPreviousPage: page > 1, hasNextPage: page * limit < total } });
+  } catch (error) { return res.status(500).json({ success: false, message: error.message }); }
 };
+export const getActivityLogById = async (req, res) => { try { const log = await prisma.activityLog.findUnique({ where: { id: req.params.id }, include: { user: { select: { id: true, name: true, username: true, email: true, role: true } } } }); if (!log) return res.status(404).json({ success: false, message: "Activity log not found" }); return res.json({ success: true, log }); } catch (error) { return res.status(500).json({ success: false, message: error.message }); } };
