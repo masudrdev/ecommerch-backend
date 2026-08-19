@@ -7,6 +7,8 @@ export const productSchema = z.object({
 
   price: z.coerce.number().positive("Price must be positive"),
   salePrice: z.coerce.number().positive().nullable().optional(),
+  flashSaleStart: z.string().nullable().optional(),
+  flashSaleEnd: z.string().nullable().optional(),
 
   stock: z.coerce.number().int().min(0),
   deliveryCharge: z.coerce.number().min(0).default(0),

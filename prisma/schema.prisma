@@ -173,28 +173,28 @@ model SupportActivity {
 }
 
 model Vendor {
-  id                     String               @id @default(uuid())
-  userId                 String               @unique
-  shopName               String
-  shopSlug               String               @unique
-  shopLogo               String?
-  shopBanner             String?
-  description            String?
-  status                 VendorStatus         @default(PENDING)
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @updatedAt
-  availableBalance       Float                @default(0)
-  totalWithdrawn         Float                @default(0)
-  defaultCommissionType  CommissionType?
-  defaultCommissionValue Float?
-  defaultCommissionActive Boolean              @default(true)
+  id                             String               @id @default(uuid())
+  userId                         String               @unique
+  shopName                       String
+  shopSlug                       String               @unique
+  shopLogo                       String?
+  shopBanner                     String?
+  description                    String?
+  status                         VendorStatus         @default(PENDING)
+  createdAt                      DateTime             @default(now())
+  updatedAt                      DateTime             @updatedAt
+  availableBalance               Float                @default(0)
+  totalWithdrawn                 Float                @default(0)
+  defaultCommissionType          CommissionType?
+  defaultCommissionValue         Float?
+  defaultCommissionActive        Boolean              @default(true)
   defaultCommissionEffectiveFrom DateTime?
-  financeTransactions    FinanceTransaction[]
-  orders                 OrderItem[]
-  orderNotes             OrderNote[]
-  payouts                PayoutRequest[]
-  products               Product[]
-  user                   User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  financeTransactions            FinanceTransaction[]
+  orders                         OrderItem[]
+  orderNotes                     OrderNote[]
+  payouts                        PayoutRequest[]
+  products                       Product[]
+  user                           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Category {
@@ -227,6 +227,9 @@ model Product {
   description                String?
   price                      Float
   salePrice                  Float?
+  isFeatured                 Boolean          @default(false)
+  flashSaleStart             DateTime?
+  flashSaleEnd               DateTime?
   stock                      Int              @default(0)
   status                     ProductStatus    @default(PENDING)
   vendorId                   String
@@ -413,9 +416,9 @@ model ActivityLog {
   id          String   @id @default(uuid())
   userId      String?
   action      String
-  module      String?
   entityType  String?
   entityId    String?
+  module      String?
   targetName  String?
   status      String   @default("SUCCESS")
   description String?
@@ -424,7 +427,8 @@ model ActivityLog {
   ipAddress   String?
   userAgent   String?
   createdAt   DateTime @default(now())
-  user        User?    @relation(fields: [userId], references: [id])
+
+  user User? @relation(fields: [userId], references: [id])
 
   @@index([createdAt])
   @@index([userId])
@@ -432,6 +436,7 @@ model ActivityLog {
   @@index([action])
   @@index([status])
 }
+
 model PayoutRequest {
   id              String       @id @default(uuid())
   vendorId        String

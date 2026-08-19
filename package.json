@@ -6,9 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "npm run prisma:sync && nodemon src/server.js",
-    "prisma:sync": "prisma migrate deploy && prisma generate",
-    "start": "npm run prisma:sync && node src/server.js"
+    "dev": "nodemon src/server.js"
   },
   "keywords": [],
   "author": "",

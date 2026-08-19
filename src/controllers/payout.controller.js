@@ -7,12 +7,7 @@ const MINIMUM_PAYOUT_AMOUNT = 100;
 const roundMoney = (value) =>
   Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
-/**
- * ==========================================
- * VENDOR: PAYOUT SUMMARY
- * GET /api/payouts/summary
- * ==========================================
- */
+ 
 export const getMyPayoutSummary = async (req, res) => {
   try {
     const vendor = await prisma.vendor.findUnique({
@@ -84,14 +79,175 @@ export const getMyPayoutSummary = async (req, res) => {
   }
 };
 
-/**
- * ==========================================
- * VENDOR: CREATE PAYOUT REQUEST
- * POST /api/payouts/request
- *
- * Request করার সময়ই availableBalance minus হবে।
- * ==========================================
- */
+ 
+// export const requestPayout = async (req, res) => {
+//   try {
+//     const {
+//       amount,
+//       paymentMethod,
+//       accountName,
+//       accountNumber,
+//       note,
+//     } = req.body;
+
+//     const payoutAmount = roundMoney(amount);
+
+//     if (!Number.isFinite(payoutAmount) || payoutAmount <= 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Enter a valid payout amount",
+//       });
+//     }
+
+//     if (payoutAmount < MINIMUM_PAYOUT_AMOUNT) {
+//       return res.status(400).json({
+//         success: false,
+//         message: `Minimum payout amount is ৳${MINIMUM_PAYOUT_AMOUNT}`,
+//       });
+//     }
+
+//     if (!paymentMethod?.trim()) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Payment method is required",
+//       });
+//     }
+
+//     if (!accountNumber?.trim()) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Account number is required",
+//       });
+//     }
+
+//     const result = await prisma.$transaction(async (tx) => {
+//       const vendor = await tx.vendor.findUnique({
+//         where: {
+//           userId: req.user.id,
+//         },
+//       });
+
+//       if (!vendor) {
+//         const error = new Error("Vendor not found");
+//         error.statusCode = 404;
+//         throw error;
+//       }
+
+//       if (vendor.status !== "APPROVED") {
+//         const error = new Error(
+//           "Only approved vendors can request payouts"
+//         );
+//         error.statusCode = 403;
+//         throw error;
+//       }
+
+//       /*
+//        * একই সময়ে একাধিক request এলেও balance negative হবে না।
+//        * Balance যথেষ্ট থাকলেই decrement হবে।
+//        */
+//       const balanceUpdate = await tx.vendor.updateMany({
+//         where: {
+//           id: vendor.id,
+//           availableBalance: {
+//             gte: payoutAmount,
+//           },
+//         },
+//         data: {
+//           availableBalance: {
+//             decrement: payoutAmount,
+//           },
+//         },
+//       });
+
+//       if (balanceUpdate.count !== 1) {
+//         const error = new Error("Insufficient available balance");
+//         error.statusCode = 400;
+//         throw error;
+//       }
+
+//       const payout = await tx.payoutRequest.create({
+//         data: {
+//           vendorId: vendor.id,
+//           amount: payoutAmount,
+//           status: "PENDING",
+
+//           paymentMethod: paymentMethod.trim().toUpperCase(),
+//           accountName: accountName?.trim() || null,
+//           accountNumber: accountNumber.trim(),
+//           vendorNote: note?.trim() || null,
+//         },
+//       });
+
+//       const updatedVendor = await tx.vendor.findUnique({
+//         where: {
+//           id: vendor.id,
+//         },
+//         select: {
+//           id: true,
+//           shopName: true,
+//           availableBalance: true,
+//         },
+//       });
+
+//       return {
+//         payout,
+//         vendor: updatedVendor,
+//       };
+//     });
+
+//     await createActivityLog({
+//       userId: req.user.id,
+//       action: "PAYOUT_REQUEST_CREATED",
+//       entityType: "PAYOUT",
+//       entityId: result.payout.id,
+//       oldData: null,
+//       newData: {
+//         vendorId: result.payout.vendorId,
+//         amount: result.payout.amount,
+//         status: result.payout.status,
+//         paymentMethod: result.payout.paymentMethod,
+//         remainingBalance: result.vendor.availableBalance,
+//       },
+//       req,
+//     });
+
+//     const superAdmins = await prisma.user.findMany({
+//       where: {
+//         role: "SUPER_ADMIN",
+//         status: "ACTIVE",
+//       },
+//       select: {
+//         id: true,
+//       },
+//     });
+
+//     await Promise.allSettled(
+//       superAdmins.map((admin) =>
+//         createNotification({
+//           userId: admin.id,
+//           title: "New Payout Request",
+//           message: `${result.vendor.shopName} requested a payout of ৳${result.payout.amount}.`,
+//           type: "PAYOUT_REQUEST_CREATED",
+//           link: "/dashboard/finance",
+//         })
+//       )
+//     );
+
+//     return res.status(201).json({
+//       success: true,
+//       message: "Payout request submitted successfully",
+//       payout: result.payout,
+//       availableBalance: roundMoney(result.vendor.availableBalance),
+//     });
+//   } catch (error) {
+//     console.error("Request payout error:", error);
+
+//     return res.status(error.statusCode || 400).json({
+//       success: false,
+//       message: error.message || "Failed to submit payout request",
+//     });
+//   }
+// };
 export const requestPayout = async (req, res) => {
   try {
     const {
@@ -153,10 +309,10 @@ export const requestPayout = async (req, res) => {
         throw error;
       }
 
-      /*
-       * একই সময়ে একাধিক request এলেও balance negative হবে না।
-       * Balance যথেষ্ট থাকলেই decrement হবে।
-       */
+      const previousBalance = roundMoney(
+        vendor.availableBalance
+      );
+
       const balanceUpdate = await tx.vendor.updateMany({
         where: {
           id: vendor.id,
@@ -172,7 +328,9 @@ export const requestPayout = async (req, res) => {
       });
 
       if (balanceUpdate.count !== 1) {
-        const error = new Error("Insufficient available balance");
+        const error = new Error(
+          "Insufficient available balance"
+        );
         error.statusCode = 400;
         throw error;
       }
@@ -182,56 +340,84 @@ export const requestPayout = async (req, res) => {
           vendorId: vendor.id,
           amount: payoutAmount,
           status: "PENDING",
-
-          paymentMethod: paymentMethod.trim().toUpperCase(),
-          accountName: accountName?.trim() || null,
-          accountNumber: accountNumber.trim(),
-          vendorNote: note?.trim() || null,
+          paymentMethod: paymentMethod
+            .trim()
+            .toUpperCase(),
+          accountName:
+            accountName?.trim() || null,
+          accountNumber:
+            accountNumber.trim(),
+          vendorNote:
+            note?.trim() || null,
         },
       });
 
-      const updatedVendor = await tx.vendor.findUnique({
-        where: {
-          id: vendor.id,
-        },
-        select: {
-          id: true,
-          shopName: true,
-          availableBalance: true,
-        },
-      });
+      const updatedVendor =
+        await tx.vendor.findUnique({
+          where: {
+            id: vendor.id,
+          },
+          select: {
+            id: true,
+            shopName: true,
+            availableBalance: true,
+          },
+        });
+
+      const newBalance = roundMoney(
+        updatedVendor.availableBalance
+      );
 
       return {
         payout,
         vendor: updatedVendor,
+        previousBalance,
+        newBalance,
       };
     });
 
     await createActivityLog({
       userId: req.user.id,
+
       action: "PAYOUT_REQUEST_CREATED",
+
+      module: "PAYOUT",
       entityType: "PAYOUT",
       entityId: result.payout.id,
-      oldData: null,
-      newData: {
-        vendorId: result.payout.vendorId,
-        amount: result.payout.amount,
-        status: result.payout.status,
-        paymentMethod: result.payout.paymentMethod,
-        remainingBalance: result.vendor.availableBalance,
+
+      targetName:
+        result.vendor.shopName ||
+        result.payout.id,
+
+      status: "SUCCESS",
+
+      description: `Payout request created for ৳${result.payout.amount}`,
+
+      oldData: {
+        balance: result.previousBalance,
       },
+
+      newData: {
+        balance: result.newBalance,
+        payoutAmount: result.payout.amount,
+        status: result.payout.status,
+        paymentMethod:
+          result.payout.paymentMethod,
+      },
+
       req,
     });
 
-    const superAdmins = await prisma.user.findMany({
-      where: {
-        role: "SUPER_ADMIN",
-        status: "ACTIVE",
-      },
-      select: {
-        id: true,
-      },
-    });
+    const superAdmins =
+      await prisma.user.findMany({
+        where: {
+          role: "SUPER_ADMIN",
+          status: "ACTIVE",
+        },
+        select: {
+          id: true,
+        },
+      });
 
     await Promise.allSettled(
       superAdmins.map((admin) =>
@@ -247,26 +433,30 @@ export const requestPayout = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Payout request submitted successfully",
+      message:
+        "Payout request submitted successfully",
       payout: result.payout,
-      availableBalance: roundMoney(result.vendor.availableBalance),
+      availableBalance: roundMoney(
+        result.vendor.availableBalance
+      ),
     });
   } catch (error) {
-    console.error("Request payout error:", error);
+    console.error(
+      "Request payout error:",
+      error
+    );
 
-    return res.status(error.statusCode || 400).json({
-      success: false,
-      message: error.message || "Failed to submit payout request",
-    });
+    return res
+      .status(error.statusCode || 400)
+      .json({
+        success: false,
+        message:
+          error.message ||
+          "Failed to submit payout request",
+      });
   }
 };
-
-/**
- * ==========================================
- * VENDOR: MY PAYOUT HISTORY
- * GET /api/payouts/my-requests
- * ==========================================
- */
+ 
 export const getMyPayoutRequests = async (req, res) => {
   try {
     const vendor = await prisma.vendor.findUnique({
@@ -309,14 +499,136 @@ export const getMyPayoutRequests = async (req, res) => {
   }
 };
 
-/**
- * ==========================================
- * VENDOR: CANCEL OWN PENDING PAYOUT
- * PATCH /api/payouts/:id/cancel
- *
- * Cancel করলে balance ফেরত যাবে।
- * ==========================================
- */
+ 
+// export const cancelMyPayout = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+
+//     const vendor = await prisma.vendor.findUnique({
+//       where: {
+//         userId: req.user.id,
+//       },
+//       select: {
+//         id: true,
+//       },
+//     });
+
+//     if (!vendor) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Vendor not found",
+//       });
+//     }
+
+//     const payout = await prisma.payoutRequest.findFirst({
+//       where: {
+//         id,
+//         vendorId: vendor.id,
+//       },
+//     });
+
+//     if (!payout) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Payout request not found",
+//       });
+//     }
+
+//     if (payout.status !== "PENDING") {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Only pending payout requests can be cancelled",
+//       });
+//     }
+
+//     const updatedPayout = await prisma.$transaction(async (tx) => {
+//       /*
+//        * updateMany condition double refund আটকাবে।
+//        */
+//       const statusUpdate = await tx.payoutRequest.updateMany({
+//         where: {
+//           id,
+//           vendorId: vendor.id,
+//           status: "PENDING",
+//         },
+//         data: {
+//           status: "CANCELLED",
+//           cancelledAt: new Date(),
+//         },
+//       });
+
+//       if (statusUpdate.count !== 1) {
+//         const error = new Error(
+//           "Payout was already processed or cancelled"
+//         );
+//         error.statusCode = 400;
+//         throw error;
+//       }
+
+//       await tx.vendor.update({
+//         where: {
+//           id: vendor.id,
+//         },
+//         data: {
+//           availableBalance: {
+//             increment: payout.amount,
+//           },
+//         },
+//       });
+//       await tx.financeTransaction.create({
+//         data: {
+//           type: "PAYOUT",
+
+//           amount: payout.amount,
+
+//           status: "COMPLETED",
+
+//           referenceId: payout.id,
+
+//           vendorId: payout.vendorId,
+
+//           description:
+//             `Vendor payout completed. Transaction ID: ${transactionId.trim()}`,
+//         },
+//       });
+
+//       return tx.payoutRequest.findUnique({
+//         where: {
+//           id,
+//         },
+//       });
+//     });
+
+//     await createActivityLog({
+//       userId: req.user.id,
+//       action: "PAYOUT_CANCELLED",
+//       entityType: "PAYOUT",
+//       entityId: updatedPayout.id,
+//       oldData: {
+//         status: payout.status,
+//       },
+//       newData: {
+//         status: updatedPayout.status,
+//         amount: updatedPayout.amount,
+//       },
+//       req,
+//     });
+
+//     return res.status(200).json({
+//       success: true,
+//       message:
+//         "Payout cancelled and amount returned to available balance",
+//       payout: updatedPayout,
+//     });
+//   } catch (error) {
+//     console.error("Cancel payout error:", error);
+
+//     return res.status(error.statusCode || 400).json({
+//       success: false,
+//       message: error.message || "Failed to cancel payout",
+//     });
+//   }
+// };
 export const cancelMyPayout = async (req, res) => {
   try {
     const { id } = req.params;
@@ -327,6 +639,8 @@ export const cancelMyPayout = async (req, res) => {
       },
       select: {
         id: true,
+        shopName: true,
+        availableBalance: true,
       },
     });
 
@@ -358,31 +672,34 @@ export const cancelMyPayout = async (req, res) => {
       });
     }
 
-    const updatedPayout = await prisma.$transaction(async (tx) => {
-      /*
-       * updateMany condition double refund আটকাবে।
-       */
-      const statusUpdate = await tx.payoutRequest.updateMany({
-        where: {
-          id,
-          vendorId: vendor.id,
-          status: "PENDING",
-        },
-        data: {
-          status: "CANCELLED",
-          cancelledAt: new Date(),
-        },
-      });
+    const previousBalance = roundMoney(
+      vendor.availableBalance
+    );
+
+    const result = await prisma.$transaction(async (tx) => {
+      const statusUpdate =
+        await tx.payoutRequest.updateMany({
+          where: {
+            id,
+            vendorId: vendor.id,
+            status: "PENDING",
+          },
+          data: {
+            status: "CANCELLED",
+            cancelledAt: new Date(),
+          },
+        });
 
       if (statusUpdate.count !== 1) {
         const error = new Error(
           "Payout was already processed or cancelled"
         );
+
         error.statusCode = 400;
         throw error;
       }
 
-      await tx.vendor.update({
+      const updatedVendor = await tx.vendor.update({
         where: {
           id: vendor.id,
         },
@@ -391,43 +708,53 @@ export const cancelMyPayout = async (req, res) => {
             increment: payout.amount,
           },
         },
-      });
-      await tx.financeTransaction.create({
-        data: {
-          type: "PAYOUT",
-
-          amount: payout.amount,
-
-          status: "COMPLETED",
-
-          referenceId: payout.id,
-
-          vendorId: payout.vendorId,
-
-          description:
-            `Vendor payout completed. Transaction ID: ${transactionId.trim()}`,
+        select: {
+          availableBalance: true,
         },
       });
 
-      return tx.payoutRequest.findUnique({
-        where: {
-          id,
-        },
-      });
+      const updatedPayout =
+        await tx.payoutRequest.findUnique({
+          where: {
+            id,
+          },
+        });
+
+      return {
+        payout: updatedPayout,
+        newBalance: roundMoney(
+          updatedVendor.availableBalance
+        ),
+      };
     });
 
     await createActivityLog({
       userId: req.user.id,
+
       action: "PAYOUT_CANCELLED",
+
+      module: "PAYOUT",
       entityType: "PAYOUT",
-      entityId: updatedPayout.id,
+      entityId: result.payout.id,
+
+      targetName:
+        vendor.shopName || result.payout.id,
+
+      status: "SUCCESS",
+
+      description: `Payout cancelled and ৳${payout.amount} returned to vendor balance`,
+
       oldData: {
+        balance: previousBalance,
         status: payout.status,
       },
+
       newData: {
-        status: updatedPayout.status,
-        amount: updatedPayout.amount,
+        balance: result.newBalance,
+        refundedAmount: payout.amount,
+        status: result.payout.status,
       },
+
       req,
     });
 
@@ -435,24 +762,20 @@ export const cancelMyPayout = async (req, res) => {
       success: true,
       message:
         "Payout cancelled and amount returned to available balance",
-      payout: updatedPayout,
+      payout: result.payout,
+      availableBalance: result.newBalance,
     });
   } catch (error) {
     console.error("Cancel payout error:", error);
 
     return res.status(error.statusCode || 400).json({
       success: false,
-      message: error.message || "Failed to cancel payout",
+      message:
+        error.message || "Failed to cancel payout",
     });
   }
 };
-
-/**
- * ==========================================
- * SUPER ADMIN: PAYOUT/FINANCE SUMMARY
- * GET /api/payouts/admin/summary
- * ==========================================
- */
+ 
 export const getAdminPayoutSummary = async (req, res) => {
   try {
     const [payoutGroups, vendorTotals, earningTotals] =
@@ -555,30 +878,7 @@ export const getAdminPayoutSummary = async (req, res) => {
   }
 };
 
-/**
- * ==========================================
- * ADMIN/SUPER ADMIN: ALL PAYOUT REQUESTS
- * GET /api/payouts/admin/all
- * ==========================================
- */
-/**
- * ==========================================
- * ADMIN/SUPER ADMIN: ALL PAYOUT REQUESTS
- * GET /api/payouts/admin/all
- *
- * Supports:
- * - Request ID search
- * - Vendor name/email search
- * - Account number search
- * - Transaction ID search
- * - Vendor filter
- * - Status filter
- * - Payment method filter
- * - Date range filter
- * - Pagination
- * - Filtered summary cards
- * ==========================================
- */
+ 
 export const getAllPayoutRequests = async (req, res) => {
   try {
     const {
@@ -953,14 +1253,98 @@ export const getAllPayoutRequests = async (req, res) => {
   }
 };
 
-/**
- * ==========================================
- * SUPER ADMIN: APPROVE PAYOUT
- * PATCH /api/payouts/:id/approve
- *
- * Approve করলে balance আবার minus হবে না।
- * ==========================================
- */
+ 
+// export const approvePayout = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { adminNote } = req.body;
+
+//     const payout = await prisma.payoutRequest.findUnique({
+//       where: {
+//         id,
+//       },
+//       include: {
+//         vendor: true,
+//       },
+//     });
+
+//     if (!payout) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Payout request not found",
+//       });
+//     }
+
+//     if (payout.status !== "PENDING") {
+//       return res.status(400).json({
+//         success: false,
+//         message: `Only pending payouts can be approved. Current status: ${payout.status}`,
+//       });
+//     }
+
+//     const statusUpdate = await prisma.payoutRequest.updateMany({
+//       where: {
+//         id,
+//         status: "PENDING",
+//       },
+//       data: {
+//         status: "APPROVED",
+//         approvedAt: new Date(),
+//         processedById: req.user.id,
+//         adminNote: adminNote?.trim() || null,
+//       },
+//     });
+
+//     if (statusUpdate.count !== 1) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Payout was already processed",
+//       });
+//     }
+
+//     const updatedPayout = await prisma.payoutRequest.findUnique({
+//       where: {
+//         id,
+//       },
+//     });
+
+//     await createActivityLog({
+//       userId: req.user.id,
+//       action: "PAYOUT_APPROVED",
+//       entityType: "PAYOUT",
+//       entityId: id,
+//       oldData: {
+//         status: payout.status,
+//       },
+//       newData: {
+//         status: updatedPayout.status,
+//         amount: updatedPayout.amount,
+//       },
+//       req,
+//     });
+
+//     await createNotification({
+//       userId: payout.vendor.userId,
+//       title: "Payout Approved",
+//       message: `Your payout request of ৳${payout.amount} has been approved.`,
+//       type: "PAYOUT_APPROVED",
+//       link: "/dashboard/payouts",
+//     });
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Payout approved successfully",
+//       payout: updatedPayout,
+//     });
+//   } catch (error) {
+//     console.error("Approve payout error:", error);
+
+//     return res.status(400).json({
+//       success: false,
+//       message: error.message || "Failed to approve payout",
+//     });
+//   }
+// };
 export const approvePayout = async (req, res) => {
   try {
     const { id } = req.params;
@@ -989,18 +1373,23 @@ export const approvePayout = async (req, res) => {
       });
     }
 
-    const statusUpdate = await prisma.payoutRequest.updateMany({
-      where: {
-        id,
-        status: "PENDING",
-      },
-      data: {
-        status: "APPROVED",
-        approvedAt: new Date(),
-        processedById: req.user.id,
-        adminNote: adminNote?.trim() || null,
-      },
-    });
+    const currentBalance = roundMoney(
+      payout.vendor.availableBalance
+    );
+
+    const statusUpdate =
+      await prisma.payoutRequest.updateMany({
+        where: {
+          id,
+          status: "PENDING",
+        },
+        data: {
+          status: "APPROVED",
+          approvedAt: new Date(),
+          processedById: req.user.id,
+          adminNote: adminNote?.trim() || null,
+        },
+      });
 
     if (statusUpdate.count !== 1) {
       return res.status(400).json({
@@ -1009,24 +1398,40 @@ export const approvePayout = async (req, res) => {
       });
     }
 
-    const updatedPayout = await prisma.payoutRequest.findUnique({
-      where: {
-        id,
-      },
-    });
+    const updatedPayout =
+      await prisma.payoutRequest.findUnique({
+        where: {
+          id,
+        },
+      });
 
     await createActivityLog({
       userId: req.user.id,
+
       action: "PAYOUT_APPROVED",
+
+      module: "PAYOUT",
       entityType: "PAYOUT",
       entityId: id,
+
+      targetName:
+        payout.vendor.shopName || id,
+
+      status: "SUCCESS",
+
+      description: `Payout of ৳${payout.amount} approved`,
+
       oldData: {
+        balance: currentBalance,
         status: payout.status,
       },
+
       newData: {
+        balance: currentBalance,
+        payoutAmount: updatedPayout.amount,
         status: updatedPayout.status,
-        amount: updatedPayout.amount,
       },
+
       req,
     });
 
@@ -1048,19 +1453,127 @@ export const approvePayout = async (req, res) => {
 
     return res.status(400).json({
       success: false,
-      message: error.message || "Failed to approve payout",
+      message:
+        error.message || "Failed to approve payout",
     });
   }
 };
+ 
+// export const rejectPayout = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { rejectionReason, adminNote } = req.body;
 
-/**
- * ==========================================
- * SUPER ADMIN: REJECT PAYOUT
- * PATCH /api/payouts/:id/reject
- *
- * Reject করলে amount balance-এ ফেরত যাবে।
- * ==========================================
- */
+//     if (!rejectionReason?.trim()) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Rejection reason is required",
+//       });
+//     }
+
+//     const payout = await prisma.payoutRequest.findUnique({
+//       where: {
+//         id,
+//       },
+//       include: {
+//         vendor: true,
+//       },
+//     });
+
+//     if (!payout) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Payout request not found",
+//       });
+//     }
+
+//     if (!["PENDING", "APPROVED"].includes(payout.status)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: `This payout cannot be rejected. Current status: ${payout.status}`,
+//       });
+//     }
+
+//     const updatedPayout = await prisma.$transaction(async (tx) => {
+//       const statusUpdate = await tx.payoutRequest.updateMany({
+//         where: {
+//           id,
+//           status: {
+//             in: ["PENDING", "APPROVED"],
+//           },
+//         },
+//         data: {
+//           status: "REJECTED",
+//           rejectionReason: rejectionReason.trim(),
+//           adminNote: adminNote?.trim() || null,
+//           rejectedAt: new Date(),
+//           processedById: req.user.id,
+//         },
+//       });
+
+//       if (statusUpdate.count !== 1) {
+//         const error = new Error("Payout was already processed");
+//         error.statusCode = 400;
+//         throw error;
+//       }
+
+//       await tx.vendor.update({
+//         where: {
+//           id: payout.vendorId,
+//         },
+//         data: {
+//           availableBalance: {
+//             increment: payout.amount,
+//           },
+//         },
+//       });
+
+//       return tx.payoutRequest.findUnique({
+//         where: {
+//           id,
+//         },
+//       });
+//     });
+
+//     await createActivityLog({
+//       userId: req.user.id,
+//       action: "PAYOUT_REJECTED",
+//       entityType: "PAYOUT",
+//       entityId: id,
+//       oldData: {
+//         status: payout.status,
+//       },
+//       newData: {
+//         status: updatedPayout.status,
+//         amount: updatedPayout.amount,
+//         rejectionReason: updatedPayout.rejectionReason,
+//       },
+//       req,
+//     });
+
+//     await createNotification({
+//       userId: payout.vendor.userId,
+//       title: "Payout Rejected",
+//       message: `Your payout request of ৳${payout.amount} was rejected. The amount has been returned to your available balance.`,
+//       type: "PAYOUT_REJECTED",
+//       link: "/dashboard/payouts",
+//     });
+
+//     return res.status(200).json({
+//       success: true,
+//       message:
+//         "Payout rejected and amount returned to vendor balance",
+//       payout: updatedPayout,
+//     });
+//   } catch (error) {
+//     console.error("Reject payout error:", error);
+
+//     return res.status(error.statusCode || 400).json({
+//       success: false,
+//       message: error.message || "Failed to reject payout",
+//     });
+//   }
+// };
 export const rejectPayout = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1096,30 +1609,40 @@ export const rejectPayout = async (req, res) => {
       });
     }
 
-    const updatedPayout = await prisma.$transaction(async (tx) => {
-      const statusUpdate = await tx.payoutRequest.updateMany({
-        where: {
-          id,
-          status: {
-            in: ["PENDING", "APPROVED"],
+    const previousBalance = roundMoney(
+      payout.vendor.availableBalance
+    );
+
+    const result = await prisma.$transaction(async (tx) => {
+      const statusUpdate =
+        await tx.payoutRequest.updateMany({
+          where: {
+            id,
+            status: {
+              in: ["PENDING", "APPROVED"],
+            },
           },
-        },
-        data: {
-          status: "REJECTED",
-          rejectionReason: rejectionReason.trim(),
-          adminNote: adminNote?.trim() || null,
-          rejectedAt: new Date(),
-          processedById: req.user.id,
-        },
-      });
+          data: {
+            status: "REJECTED",
+            rejectionReason:
+              rejectionReason.trim(),
+            adminNote:
+              adminNote?.trim() || null,
+            rejectedAt: new Date(),
+            processedById: req.user.id,
+          },
+        });
 
       if (statusUpdate.count !== 1) {
-        const error = new Error("Payout was already processed");
+        const error = new Error(
+          "Payout was already processed"
+        );
+
         error.statusCode = 400;
         throw error;
       }
 
-      await tx.vendor.update({
+      const updatedVendor = await tx.vendor.update({
         where: {
           id: payout.vendorId,
         },
@@ -1128,28 +1651,55 @@ export const rejectPayout = async (req, res) => {
             increment: payout.amount,
           },
         },
-      });
-
-      return tx.payoutRequest.findUnique({
-        where: {
-          id,
+        select: {
+          availableBalance: true,
         },
       });
+
+      const updatedPayout =
+        await tx.payoutRequest.findUnique({
+          where: {
+            id,
+          },
+        });
+
+      return {
+        payout: updatedPayout,
+        newBalance: roundMoney(
+          updatedVendor.availableBalance
+        ),
+      };
     });
 
     await createActivityLog({
       userId: req.user.id,
+
       action: "PAYOUT_REJECTED",
+
+      module: "PAYOUT",
       entityType: "PAYOUT",
       entityId: id,
+
+      targetName:
+        payout.vendor.shopName || id,
+
+      status: "SUCCESS",
+
+      description: `Payout rejected and ৳${payout.amount} returned to vendor balance`,
+
       oldData: {
+        balance: previousBalance,
         status: payout.status,
       },
+
       newData: {
-        status: updatedPayout.status,
-        amount: updatedPayout.amount,
-        rejectionReason: updatedPayout.rejectionReason,
+        balance: result.newBalance,
+        refundedAmount: payout.amount,
+        status: result.payout.status,
+        rejectionReason:
+          result.payout.rejectionReason,
       },
+
       req,
     });
 
@@ -1165,26 +1715,20 @@ export const rejectPayout = async (req, res) => {
       success: true,
       message:
         "Payout rejected and amount returned to vendor balance",
-      payout: updatedPayout,
+      payout: result.payout,
+      availableBalance: result.newBalance,
     });
   } catch (error) {
     console.error("Reject payout error:", error);
 
     return res.status(error.statusCode || 400).json({
       success: false,
-      message: error.message || "Failed to reject payout",
+      message:
+        error.message || "Failed to reject payout",
     });
   }
 };
-
-/**
- * ==========================================
- * SUPER ADMIN: MARK PAYOUT AS PAID
- * PATCH /api/payouts/:id/mark-paid
- *
- * এখানে totalWithdrawn increment হবে।
- * ==========================================
- */
+ 
 export const markPayoutAsPaid = async (req, res) => {
   try {
     const { id } = req.params;

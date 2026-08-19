@@ -3,6 +3,8 @@ import {
   createProduct,
   getProducts,
   getAdminProducts,
+  getFeaturedProductManagement,
+  updateFeaturedProduct,
   getProductBySlug,
   updateProductStatus,
   uploadProductImages,
@@ -30,6 +32,18 @@ router.get(
   protect,
   allowRoles("ADMIN", "SUPER_ADMIN"),
   getAdminProducts
+);
+router.get(
+  "/admin/featured",
+  protect,
+  allowRoles("ADMIN", "SUPER_ADMIN"),
+  getFeaturedProductManagement
+);
+router.patch(
+  "/:id/featured",
+  protect,
+  allowRoles("ADMIN", "SUPER_ADMIN"),
+  updateFeaturedProduct
 );
 router.get("/vendor/my-products", protect, allowRoles("VENDOR"), getMyVendorProducts);
 router.get(

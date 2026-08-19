@@ -8,6 +8,7 @@ import deleteFromCloudinary from "../utils/deleteFromCloudinary.js";
 // export const createProduct = async (req, res) => {
 //   try {
 //     const data = productSchema.parse(req.body);
+  
 
 //     const vendor = await prisma.vendor.findUnique({
 //       where: { userId: req.user.id },
@@ -91,9 +92,80 @@ const slugify = (text) =>
     .replace(/[^\w\s-]/g, "")
     .replace(/\s+/g, "-");
 
+const normalizeSaleConfiguration = ({
+  price,
+  salePrice,
+  flashSaleStart,
+  flashSaleEnd,
+}) => {
+  const regularPrice = Number(price);
+  if (!Number.isFinite(regularPrice) || regularPrice <= 0) {
+    throw new Error("Regular price must be greater than 0");
+  }
+
+  const hasSalePrice =
+    salePrice !== undefined && salePrice !== null && salePrice !== "";
+
+  if (!hasSalePrice) {
+    return {
+      salePrice: null,
+      flashSaleStart: null,
+      flashSaleEnd: null,
+    };
+  }
+
+  const normalizedSalePrice = Number(salePrice);
+  if (!Number.isFinite(normalizedSalePrice) || normalizedSalePrice <= 0) {
+    throw new Error("Sale price must be greater than 0");
+  }
+
+  if (normalizedSalePrice >= regularPrice) {
+    throw new Error("Sale price must be lower than the regular price");
+  }
+
+  const hasStart = Boolean(flashSaleStart);
+  const hasEnd = Boolean(flashSaleEnd);
+
+  if (hasStart !== hasEnd) {
+    throw new Error(
+      "Provide both offer start and end times, or leave both empty"
+    );
+  }
+
+  if (!hasStart) {
+    return {
+      salePrice: normalizedSalePrice,
+      flashSaleStart: null,
+      flashSaleEnd: null,
+    };
+  }
+
+  const start = new Date(flashSaleStart);
+  const end = new Date(flashSaleEnd);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throw new Error("Offer start and end times must be valid dates");
+  }
+
+  if (end <= start) {
+    throw new Error("Offer end time must be after the start time");
+  }
+
+  if (end <= new Date()) {
+    throw new Error("Offer end time must be in the future");
+  }
+
+  return {
+    salePrice: normalizedSalePrice,
+    flashSaleStart: start,
+    flashSaleEnd: end,
+  };
+};
+
 export const createProduct = async (req, res) => {
   try {
     const data = productSchema.parse(req.body);
+    const sale = normalizeSaleConfiguration(data);
 
     const vendor = await prisma.vendor.findUnique({
       where: { userId: req.user.id },
@@ -121,10 +193,12 @@ export const createProduct = async (req, res) => {
         slug: finalSlug,
         description: data.description,
         price: data.price,
-        salePrice: data.salePrice,
+        salePrice: sale.salePrice,
         stock: data.stock,
         deliveryCharge: data.deliveryCharge,
         outsideDistrictExtraCharge: data.outsideDistrictExtraCharge,
+        flashSaleStart: sale.flashSaleStart,
+        flashSaleEnd: sale.flashSaleEnd,
         categoryId: data.categoryId || null,
         brandId: data.brandId || null,
         vendorId: vendor.id,
@@ -158,6 +232,7 @@ export const getProducts = async (req, res) => {
       sort = "latest",
       page = 1,
       limit = 12,
+      featured,
     } = req.query;
 
     const pageNumber = Number(page);
@@ -167,6 +242,10 @@ export const getProducts = async (req, res) => {
     const where = {
       status: "APPROVED",
     };
+
+    if (featured === "true") {
+      where.isFeatured = true;
+    }
 
     if (search) {
       where.OR = [
@@ -186,9 +265,27 @@ export const getProducts = async (req, res) => {
     }
 
     if (category) {
-      where.category = {
-        slug: category,
-      };
+      const selectedCategory = await prisma.category.findUnique({
+        where: { slug: category },
+        select: { id: true },
+      });
+
+      if (selectedCategory) {
+        const allCategories = await prisma.category.findMany({
+          select: { id: true, parentId: true },
+        });
+        const descendants = [selectedCategory.id];
+        for (let index = 0; index < descendants.length; index += 1) {
+          descendants.push(
+            ...allCategories
+              .filter((item) => item.parentId === descendants[index])
+              .map((item) => item.id)
+          );
+        }
+        where.categoryId = { in: descendants };
+      } else {
+        where.categoryId = "__category_not_found__";
+      }
     }
 
     if (brand) {
@@ -249,6 +346,9 @@ export const getProducts = async (req, res) => {
           },
           images: true,
           variants: true,
+          reviews: {
+            select: { rating: true },
+          },
         },
         orderBy,
         skip,
@@ -264,13 +364,71 @@ export const getProducts = async (req, res) => {
       page: pageNumber,
       limit: limitNumber,
       totalPages: Math.ceil(total / limitNumber),
-      products,
+      products: products.map((product) => ({
+        ...product,
+        isFlashSaleActive:
+          product.salePrice !== null &&
+          (!product.flashSaleStart || product.flashSaleStart <= new Date()) &&
+          (!product.flashSaleEnd || product.flashSaleEnd > new Date()),
+      })),
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: error.message,
     });
+  }
+};
+export const getFeaturedProductManagement = async (req, res) => {
+  try {
+    const { search = "", categoryId = "", featured = "ALL", page = 1, limit = 20 } = req.query;
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), 100);
+    const where = { status: "APPROVED" };
+    if (featured === "FEATURED") where.isFeatured = true;
+    if (featured === "NOT_FEATURED") where.isFeatured = false;
+    if (search.trim()) where.OR = [
+      { name: { contains: search.trim(), mode: "insensitive" } },
+      { vendor: { user: { username: { contains: search.trim(), mode: "insensitive" } } } },
+    ];
+    if (categoryId) {
+      const categories = await prisma.category.findMany({ select: { id: true, parentId: true } });
+      const categoryIds = [], queue = [categoryId], visited = new Set();
+      while (queue.length) {
+        const currentId = queue.shift();
+        if (!currentId || visited.has(currentId)) continue;
+        visited.add(currentId); categoryIds.push(currentId);
+        categories.filter((category) => category.parentId === currentId).forEach((category) => queue.push(category.id));
+      }
+      where.categoryId = { in: categoryIds };
+    }
+    const [products, total] = await Promise.all([
+      prisma.product.findMany({
+        where,
+        include: { category: true, images: true, vendor: { select: { id: true, shopName: true, shopSlug: true, user: { select: { username: true } } } } },
+        orderBy: [{ isFeatured: "desc" }, { updatedAt: "desc" }],
+        skip: (pageNumber - 1) * limitNumber,
+        take: limitNumber,
+      }),
+      prisma.product.count({ where }),
+    ]);
+    return res.json({ success: true, products, pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.max(Math.ceil(total / limitNumber), 1) } });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || "Unable to load featured products" });
+  }
+};
+
+export const updateFeaturedProduct = async (req, res) => {
+  try {
+    const { isFeatured } = req.body;
+    if (typeof isFeatured !== "boolean") return res.status(400).json({ success: false, message: "isFeatured must be true or false" });
+    const product = await prisma.product.findUnique({ where: { id: req.params.id } });
+    if (!product) return res.status(404).json({ success: false, message: "Product not found" });
+    if (product.status !== "APPROVED") return res.status(400).json({ success: false, message: "Only approved products can be featured" });
+    const updatedProduct = await prisma.product.update({ where: { id: product.id }, data: { isFeatured } });
+    return res.json({ success: true, message: isFeatured ? "Product added to Featured Products" : "Product removed from Featured Products", product: updatedProduct });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || "Unable to update featured product" });
   }
 };
 export const getProductBySlug = async (req, res) => {
@@ -713,16 +871,17 @@ export const updateProduct = async (req, res) => {
      * Vendor নিজের product-এর normal editable fields update করবে।
      * Update করলে product আবার PENDING হবে।
      */
+    const sale = normalizeSaleConfiguration(req.body);
+
     const data = {
       name: req.body.name,
       description: req.body.description,
       price: Number(req.body.price),
 
-      salePrice:
-        req.body.salePrice === null ||
-        req.body.salePrice === ""
-          ? null
-          : Number(req.body.salePrice),
+      salePrice: sale.salePrice,
+
+      flashSaleStart: sale.flashSaleStart,
+      flashSaleEnd: sale.flashSaleEnd,
 
       deliveryCharge: Number(
         req.body.deliveryCharge || 0
