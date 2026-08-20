@@ -1338,13 +1338,208 @@ export const updateOrderStatus = async (req, res) => {
         message: validationError,
       });
     }
-    const order = await prisma.order.update({
-      where: { id },
-      data: updateData,
-      include: {
-        items: true,
-      },
-    });
+const order = await prisma.$transaction(async (tx) => {
+  const items = await tx.orderItem.findMany({
+    where: {
+      orderId: id,
+    },
+    include: {
+      product: true,
+    },
+  });
+
+  /*
+   * Whole order CONFIRMED
+   *
+   * শুধু যেসব item-এর stock আগে কমেনি
+   * সেগুলোর stock কমবে।
+   */
+  if (
+    orderStatus === "CONFIRMED" &&
+    oldOrder.orderStatus !== "CONFIRMED"
+  ) {
+    for (const item of items) {
+      if (
+        item.itemStatus === "CANCELLED" ||
+        item.stockReduced
+      ) {
+        continue;
+      }
+
+      const variant =
+        await tx.productVariant.findFirst({
+          where: {
+            productId: item.productId,
+            size: item.size || null,
+            color: item.color || null,
+          },
+        });
+
+      if (variant) {
+        if (variant.stock < item.quantity) {
+          throw new Error(
+            `${item.product.name} variant stock not available`
+          );
+        }
+
+        if (item.product.stock < item.quantity) {
+          throw new Error(
+            `${item.product.name} stock not available`
+          );
+        }
+
+        await tx.productVariant.update({
+          where: {
+            id: variant.id,
+          },
+          data: {
+            stock: {
+              decrement: item.quantity,
+            },
+          },
+        });
+
+        await tx.product.update({
+          where: {
+            id: item.productId,
+          },
+          data: {
+            stock: {
+              decrement: item.quantity,
+            },
+          },
+        });
+      } else {
+        if (item.product.stock < item.quantity) {
+          throw new Error(
+            `${item.product.name} stock not available`
+          );
+        }
+
+        await tx.product.update({
+          where: {
+            id: item.productId,
+          },
+          data: {
+            stock: {
+              decrement: item.quantity,
+            },
+          },
+        });
+      }
+
+      await tx.orderItem.update({
+        where: {
+          id: item.id,
+        },
+        data: {
+          stockReduced: true,
+        },
+      });
+
+      await tx.orderTimeline.create({
+        data: {
+          orderId: id,
+          itemId: item.id,
+          userId: req.user.id,
+          title: "Stock deducted",
+          details: `${item.quantity} quantity deducted for ${item.product.name}`,
+          type: "STOCK",
+        },
+      });
+    }
+  }
+
+  /*
+   * Whole order CANCELLED
+   *
+   * শুধু আগে stock কমানো item-এর stock ফেরত যাবে।
+   */
+  if (
+    orderStatus === "CANCELLED" &&
+    oldOrder.orderStatus !== "CANCELLED"
+  ) {
+    for (const item of items) {
+      if (!item.stockReduced) {
+        continue;
+      }
+
+      const variant =
+        await tx.productVariant.findFirst({
+          where: {
+            productId: item.productId,
+            size: item.size || null,
+            color: item.color || null,
+          },
+        });
+
+      if (variant) {
+        await tx.productVariant.update({
+          where: {
+            id: variant.id,
+          },
+          data: {
+            stock: {
+              increment: item.quantity,
+            },
+          },
+        });
+
+        await tx.product.update({
+          where: {
+            id: item.productId,
+          },
+          data: {
+            stock: {
+              increment: item.quantity,
+            },
+          },
+        });
+      } else {
+        await tx.product.update({
+          where: {
+            id: item.productId,
+          },
+          data: {
+            stock: {
+              increment: item.quantity,
+            },
+          },
+        });
+      }
+
+      await tx.orderItem.update({
+        where: {
+          id: item.id,
+        },
+        data: {
+          stockReduced: false,
+        },
+      });
+
+      await tx.orderTimeline.create({
+        data: {
+          orderId: id,
+          itemId: item.id,
+          userId: req.user.id,
+          title: "Stock returned",
+          details: `${item.quantity} quantity returned for ${item.product.name}`,
+          type: "STOCK",
+        },
+      });
+    }
+  }
+
+  return tx.order.update({
+    where: {
+      id,
+    },
+    data: updateData,
+    include: {
+      items: true,
+    },
+  });
+});
     const isOrderStatusChanged = oldOrder.orderStatus !== order.orderStatus;
     const isPaymentStatusChanged = oldOrder.paymentStatus !== order.paymentStatus;
     let notificationTitle = "Order Updated";
@@ -3686,9 +3881,166 @@ export const updateOrderItemStatusByAdmin = async (
            * Update data আলাদা করে তৈরি করা হচ্ছে।
            * এতে shippedAt safely preserve হবে।
            */
-          const updateData = {
-            itemStatus,
-          };
+          /*
+ * ==========================================
+ * STOCK MANAGEMENT
+ * ==========================================
+ *
+ * PENDING -> CONFIRMED
+ * stock একবারই কমবে।
+ *
+ * CANCELLED
+ * আগে stock কমানো হয়ে থাকলে একবারই ফেরত যাবে।
+ */
+
+// CONFIRM => STOCK DECREASE
+if (
+  itemStatus === "CONFIRMED" &&
+  !existingItem.stockReduced
+) {
+  const variant = await tx.productVariant.findFirst({
+    where: {
+      productId: existingItem.productId,
+      size: existingItem.size || null,
+      color: existingItem.color || null,
+    },
+  });
+
+  if (variant) {
+    if (variant.stock < existingItem.quantity) {
+      throw new Error(
+        `${existingItem.product.name} variant stock not available`
+      );
+    }
+
+    if (existingItem.product.stock < existingItem.quantity) {
+      throw new Error(
+        `${existingItem.product.name} stock not available`
+      );
+    }
+
+    await tx.productVariant.update({
+      where: {
+        id: variant.id,
+      },
+      data: {
+        stock: {
+          decrement: existingItem.quantity,
+        },
+      },
+    });
+
+    await tx.product.update({
+      where: {
+        id: existingItem.productId,
+      },
+      data: {
+        stock: {
+          decrement: existingItem.quantity,
+        },
+      },
+    });
+  } else {
+    if (existingItem.product.stock < existingItem.quantity) {
+      throw new Error(
+        `${existingItem.product.name} stock not available`
+      );
+    }
+
+    await tx.product.update({
+      where: {
+        id: existingItem.productId,
+      },
+      data: {
+        stock: {
+          decrement: existingItem.quantity,
+        },
+      },
+    });
+  }
+
+  await tx.orderTimeline.create({
+    data: {
+      orderId: existingItem.orderId,
+      itemId: existingItem.id,
+      userId: req.user.id,
+      title: "Stock deducted",
+      details: `${existingItem.quantity} quantity deducted for ${existingItem.product.name}`,
+      type: "STOCK",
+    },
+  });
+}
+
+
+// CANCEL => STOCK RETURN
+if (
+  itemStatus === "CANCELLED" &&
+  existingItem.stockReduced
+) {
+  const variant = await tx.productVariant.findFirst({
+    where: {
+      productId: existingItem.productId,
+      size: existingItem.size || null,
+      color: existingItem.color || null,
+    },
+  });
+
+  if (variant) {
+    await tx.productVariant.update({
+      where: {
+        id: variant.id,
+      },
+      data: {
+        stock: {
+          increment: existingItem.quantity,
+        },
+      },
+    });
+
+    await tx.product.update({
+      where: {
+        id: existingItem.productId,
+      },
+      data: {
+        stock: {
+          increment: existingItem.quantity,
+        },
+      },
+    });
+  } else {
+    await tx.product.update({
+      where: {
+        id: existingItem.productId,
+      },
+      data: {
+        stock: {
+          increment: existingItem.quantity,
+        },
+      },
+    });
+  }
+
+  await tx.orderTimeline.create({
+    data: {
+      orderId: existingItem.orderId,
+      itemId: existingItem.id,
+      userId: req.user.id,
+      title: "Stock returned",
+      details: `${existingItem.quantity} quantity returned for ${existingItem.product.name}`,
+      type: "STOCK",
+    },
+  });
+}
+       const updateData = {
+  itemStatus,
+
+  stockReduced:
+    itemStatus === "CONFIRMED"
+      ? true
+      : itemStatus === "CANCELLED"
+        ? false
+        : existingItem.stockReduced,
+};
 
           /*
            * প্রথমবার SHIPPED হলে shipment date save।
