@@ -20,6 +20,7 @@ import {
   getAdminUsers,
   getSupportDashboardStats,
 } from "../controllers/support.controller.js";
+import { getRelatedResources } from "../controllers/supportResource.controller.js";
 
 import {
   protect,
@@ -57,6 +58,8 @@ router.get(
   customerVendorRoles,
   getMyTickets
 );
+
+router.get("/related-resources", protect, customerVendorRoles, getRelatedResources);
 
 router.patch(
   "/tickets/:id/close",

@@ -49,7 +49,7 @@ router.get("/vendor/my-products", protect, allowRoles("VENDOR"), getMyVendorProd
 router.get(
   "/manage/:id",
   protect,
-  allowRoles("VENDOR", "ADMIN", "SUPER_ADMIN"),
+  allowRoles("VENDOR", "SUPPORT_AGENT", "ADMIN", "SUPER_ADMIN"),
   getProductForManage
 );
 

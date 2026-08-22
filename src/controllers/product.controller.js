@@ -635,7 +635,7 @@ export const addProductVariants = async (req, res) => {
 //       });
 //     }
 
-//     const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+//     const isAdmin = ["SUPPORT_AGENT", "ADMIN", "SUPER_ADMIN"].includes(req.user.role);
 
 //     if (!isAdmin && product.vendor.userId !== req.user.id) {
 //       return res.status(403).json({
@@ -1030,7 +1030,7 @@ export const getProductForManage = async (req, res) => {
     }
 
     const isOwner = product.vendor.userId === req.user.id;
-    const isAdmin = ["ADMIN", "SUPER_ADMIN"].includes(req.user.role);
+    const isAdmin = ["SUPPORT_AGENT", "ADMIN", "SUPER_ADMIN"].includes(req.user.role);
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({

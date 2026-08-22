@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma.js";
+import { loadRelatedInformation, verifySupportReferences } from "./supportResource.controller.js";
 
 const STAFF_ROLES = ["SUPPORT_AGENT", "ADMIN", "SUPER_ADMIN"];
 const ADMIN_ROLES = ["ADMIN", "SUPER_ADMIN"];
@@ -15,11 +16,11 @@ const TICKET_STATUSES = [
 ];
 
 const TICKET_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"];
+const CUSTOMER_TICKET_CATEGORIES = ["ORDER_ISSUE", "ACCOUNT_ISSUE"];
 
 const TICKET_CATEGORIES = [
   "ORDER_ISSUE",
   "PAYMENT_ISSUE",
-  "REFUND_REQUEST",
   "WITHDRAWAL_ISSUE",
   "ACCOUNT_ISSUE",
   "PRODUCT_ISSUE",
@@ -102,10 +103,11 @@ const getTicketAccess = async (ticketId, user) => {
 
   const owner = ticket.userId === user.id;
   const staff = isStaff(user.role);
+  const staffAllowed = user.role !== "SUPPORT_AGENT" || !ticket.assignedToId || ticket.assignedToId === user.id;
 
   return {
     ticket,
-    allowed: owner || staff,
+    allowed: owner || (staff && staffAllowed),
     owner,
     staff,
   };
@@ -164,6 +166,9 @@ export const createTicket = async (req, res) => {
     const category = req.body.category || "OTHER";
     const priority = req.body.priority || "MEDIUM";
     const orderId = cleanString(req.body.orderId) || null;
+    const productId = cleanString(req.body.productId) || null;
+    const paymentTransactionId = cleanString(req.body.paymentTransactionId) || null;
+    const withdrawalId = cleanString(req.body.withdrawalId) || null;
 
     if (!subject) {
       return res.status(400).json({
@@ -179,7 +184,10 @@ export const createTicket = async (req, res) => {
       });
     }
 
-    if (!TICKET_CATEGORIES.includes(category)) {
+    if (
+      !TICKET_CATEGORIES.includes(category) ||
+      (req.user.role === "CUSTOMER" && !CUSTOMER_TICKET_CATEGORIES.includes(category))
+    ) {
       return res.status(400).json({
         success: false,
         message: "Invalid ticket category",
@@ -193,9 +201,19 @@ export const createTicket = async (req, res) => {
       });
     }
 
+    if (req.user.role === "CUSTOMER" && (productId || paymentTransactionId || withdrawalId)) {
+      return res.status(403).json({ success: false, message: "Customers can only reference their own order" });
+    }
+
+    try {
+      await verifySupportReferences(req.user, { orderId, productId, paymentTransactionId, withdrawalId });
+    } catch (error) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+
     const ticketNumber = await findUniqueTicketNumber();
 
-    const ticket = await prisma.$transaction(async (tx) => {
+    const createdTicketSummary = await prisma.$transaction(async (tx) => {
       const createdTicket = await tx.supportTicket.create({
         data: {
           ticketNumber,
@@ -205,6 +223,9 @@ export const createTicket = async (req, res) => {
           category,
           priority,
           orderId,
+          productId,
+          paymentTransactionId,
+          withdrawalId,
           status: "OPEN",
           lastActivityAt: new Date(),
           messages: {
@@ -215,7 +236,7 @@ export const createTicket = async (req, res) => {
             },
           },
         },
-        include: ticketDetailsInclude,
+        select: { id: true },
       });
 
       await tx.supportActivity.create({
@@ -228,6 +249,11 @@ export const createTicket = async (req, res) => {
       });
 
       return createdTicket;
+    }, { timeout: 15000 });
+
+    const ticket = await prisma.supportTicket.findUnique({
+      where: { id: createdTicketSummary.id },
+      include: ticketDetailsInclude,
     });
 
     return res.status(201).json({
@@ -254,6 +280,7 @@ export const getMyTickets = async (req, res) => {
       search,
       page = "1",
       limit = "10",
+      sort = "updated",
     } = req.query;
 
     const pageNumber = Math.max(Number.parseInt(page, 10) || 1, 1);
@@ -342,9 +369,7 @@ export const getMyTickets = async (req, res) => {
             },
           },
         },
-        orderBy: {
-          lastActivityAt: "desc",
-        },
+        orderBy: sort === "oldest" ? { createdAt: "asc" } : sort === "newest" ? { createdAt: "desc" } : sort === "priority" ? [{ priority: "desc" }, { lastActivityAt: "desc" }] : { lastActivityAt: "desc" },
         skip: (pageNumber - 1) * pageSize,
         take: pageSize,
       }),
@@ -384,6 +409,12 @@ export const getAllTickets = async (req, res) => {
       archived = "false",
       page = "1",
       limit = "20",
+      sort = "priority",
+      escalated,
+      createdFrom,
+      createdTo,
+      updatedFrom,
+      updatedTo,
     } = req.query;
 
     const pageNumber = Math.max(Number.parseInt(page, 10) || 1, 1);
@@ -424,6 +455,16 @@ export const getAllTickets = async (req, res) => {
 
     if (assigned === "me") {
       where.assignedToId = req.user.id;
+    }
+
+    if (escalated === "true") where.status = "ESCALATED";
+
+    const validDate = (value) => value && !Number.isNaN(new Date(value).getTime());
+    if (validDate(createdFrom) || validDate(createdTo)) where.createdAt = { ...(validDate(createdFrom) && { gte: new Date(createdFrom) }), ...(validDate(createdTo) && { lte: new Date(createdTo) }) };
+    if (validDate(updatedFrom) || validDate(updatedTo)) where.updatedAt = { ...(validDate(updatedFrom) && { gte: new Date(updatedFrom) }), ...(validDate(updatedTo) && { lte: new Date(updatedTo) }) };
+
+    if (req.user.role === "SUPPORT_AGENT") {
+      where.AND = [{ OR: [{ assignedToId: null }, { assignedToId: req.user.id }] }];
     }
 
     if (search) {
@@ -512,14 +553,7 @@ export const getAllTickets = async (req, res) => {
             },
           },
         },
-        orderBy: [
-          {
-            priority: "desc",
-          },
-          {
-            lastActivityAt: "desc",
-          },
-        ],
+        orderBy: sort === "oldest" ? { createdAt: "asc" } : sort === "newest" ? { createdAt: "desc" } : sort === "updated" ? { lastActivityAt: "desc" } : [{ priority: "desc" }, { lastActivityAt: "desc" }],
         skip: (pageNumber - 1) * pageSize,
         take: pageSize,
       }),
@@ -565,6 +599,10 @@ export const getTicketDetails = async (req, res) => {
     const owner = ticket.userId === req.user.id;
     const staff = isStaff(req.user.role);
 
+    if (req.user.role === "SUPPORT_AGENT" && ticket.assignedToId && ticket.assignedToId !== req.user.id) {
+      return res.status(403).json({ success: false, message: "This ticket is assigned to another support agent" });
+    }
+
     if (!owner && !staff) {
       return res.status(403).json({
         success: false,
@@ -594,9 +632,11 @@ export const getTicketDetails = async (req, res) => {
       );
     }
 
+    const relatedInformation = await loadRelatedInformation(ticket);
+
     return res.json({
       success: true,
-      ticket,
+      ticket: { ...ticket, relatedInformation },
     });
   } catch (error) {
     console.error("Get support ticket details error:", error);
@@ -1705,9 +1745,7 @@ export const getSupportDashboardStats = async (req, res) => {
             select: USER_SELECT,
           },
         },
-        orderBy: {
-          lastActivityAt: "desc",
-        },
+        orderBy: { lastActivityAt: "desc" },
         take: 8,
       }),
       prisma.supportTicket.aggregate({

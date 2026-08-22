@@ -755,7 +755,8 @@ export const getOrderDetails = async (req, res) => {
 
     const isAdmin =
       req.user.role === "ADMIN" ||
-      req.user.role === "SUPER_ADMIN";
+      req.user.role === "SUPER_ADMIN" ||
+      req.user.role === "SUPPORT_AGENT";
 
     if (!isOwner && !isAdmin) {
       return res.status(403).json({

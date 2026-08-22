@@ -79,36 +79,39 @@ model UserAddress {
 }
 
 model SupportTicket {
-  id                String              @id @default(uuid())
-  userId            String
-  subject           String
-  category          String?
-  status            TicketStatus        @default(OPEN)
-  orderId           String?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-  assignedToId      String?
-  closedAt          DateTime?
-  customerFeedback  String?
-  customerRating    Int?
-  description       String?
-  escalatedById     String?
-  escalatedToId     String?
-  escalationReason  String?
-  firstResponseAt   DateTime?
-  isArchived        Boolean             @default(false)
-  lastActivityAt    DateTime            @default(now())
-  priority          TicketPriority      @default(MEDIUM)
-  resolutionSummary String?
-  resolvedAt        DateTime?
-  ticketNumber      String?             @unique
-  activities        SupportActivity[]
-  attachments       SupportAttachment[]
-  messages          SupportMessage[]
-  assignedTo        User?               @relation("SupportTicketAssignedTo", fields: [assignedToId], references: [id])
-  escalatedBy       User?               @relation("SupportTicketEscalatedBy", fields: [escalatedById], references: [id])
-  escalatedTo       User?               @relation("SupportTicketEscalatedTo", fields: [escalatedToId], references: [id])
-  user              User                @relation("SupportTicketCreatedBy", fields: [userId], references: [id], onDelete: Cascade)
+  id                   String              @id @default(uuid())
+  userId               String
+  subject              String
+  category             String?
+  status               TicketStatus        @default(OPEN)
+  orderId              String?
+  productId            String?
+  paymentTransactionId String?
+  withdrawalId         String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  assignedToId         String?
+  closedAt             DateTime?
+  customerFeedback     String?
+  customerRating       Int?
+  description          String?
+  escalatedById        String?
+  escalatedToId        String?
+  escalationReason     String?
+  firstResponseAt      DateTime?
+  isArchived           Boolean             @default(false)
+  lastActivityAt       DateTime            @default(now())
+  priority             TicketPriority      @default(MEDIUM)
+  resolutionSummary    String?
+  resolvedAt           DateTime?
+  ticketNumber         String?             @unique
+  activities           SupportActivity[]
+  attachments          SupportAttachment[]
+  messages             SupportMessage[]
+  assignedTo           User?               @relation("SupportTicketAssignedTo", fields: [assignedToId], references: [id])
+  escalatedBy          User?               @relation("SupportTicketEscalatedBy", fields: [escalatedById], references: [id])
+  escalatedTo          User?               @relation("SupportTicketEscalatedTo", fields: [escalatedToId], references: [id])
+  user                 User                @relation("SupportTicketCreatedBy", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([assignedToId])
@@ -116,6 +119,10 @@ model SupportTicket {
   @@index([status])
   @@index([priority])
   @@index([category])
+  @@index([orderId])
+  @@index([productId])
+  @@index([paymentTransactionId])
+  @@index([withdrawalId])
   @@index([createdAt])
   @@index([lastActivityAt])
 }
