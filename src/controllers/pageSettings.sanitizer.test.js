@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { sanitizeContent } from "./pageSettings.controller.js";
+const unsafe = sanitizeContent('<script>alert(1)</script><img src="x" onerror="alert(1)"><p onclick="bad()">Safe</p><a href="javascript:alert(1)">bad</a><iframe src="x"></iframe>');
+assert.doesNotMatch(unsafe, /<script|<img|onerror|onclick|javascript:|<iframe/i);
+assert.match(unsafe, /<p>Safe<\/p>/);
+const safe = sanitizeContent('<h2>Title</h2><p><strong>Bold</strong> <em>Italic</em> <u>Under</u></p><ul><li>One</li></ul><blockquote>Quote</blockquote><a href="https://example.com" target="_blank">Link</a><a href="mailto:test@example.com">Mail</a>');
+assert.match(safe, /<h2>Title<\/h2>/);
+assert.match(safe, /noopener noreferrer/);
+assert.match(safe, /mailto:test@example.com/);
+console.log("Sanitizer security tests passed");

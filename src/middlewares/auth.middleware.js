@@ -5,16 +5,31 @@ export const protect = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (
+      !authHeader ||
+      !authHeader.startsWith("Bearer ")
+    ) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized access",
       });
     }
 
-    const token = authHeader.split(" ")[1];
+    const token = authHeader.slice(7).trim();
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (
+      decoded.tokenType &&
+      decoded.tokenType !== "access"
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token purpose",
+      });
+    }
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
@@ -27,12 +42,6 @@ export const protect = async (req, res, next) => {
         status: true,
       },
     });
-    if (user.status !== "ACTIVE") {
-  return res.status(403).json({
-    success: false,
-    message: "Your account is blocked or inactive",
-  });
-}
 
     if (!user) {
       return res.status(401).json({
@@ -41,9 +50,17 @@ export const protect = async (req, res, next) => {
       });
     }
 
+    if (user.status !== "ACTIVE") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your account is blocked or inactive",
+      });
+    }
+
     req.user = user;
     next();
-  } catch (error) {
+  } catch {
     return res.status(401).json({
       success: false,
       message: "Invalid or expired token",
@@ -53,7 +70,7 @@ export const protect = async (req, res, next) => {
 
 export const allowRoles = (...roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: "Access denied",

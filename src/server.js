@@ -1,5 +1,7 @@
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
+import helmet from "helmet";
 import dotenv from "dotenv";
 import authRoutes from "./routes/auth.routes.js";
 import categoryRoutes from "./routes/category.routes.js";
@@ -19,19 +21,49 @@ import dashboardRoutes from "./routes/dashboard.routes.js";
 import addressRoutes from "./routes/address.routes.js";
 import financeRoutes from "./routes/finance.routes.js";
 import userManagementRoutes from "./routes/userManagement.routes.js";
+import pageSettingsRoutes from "./routes/pageSettings.routes.js";
 
 
 dotenv.config();
 
 const app = express();
 
+if (process.env.TRUST_PROXY === "true") {
+  app.set("trust proxy", 1);
+}
+
+const allowedOrigins = (
+  process.env.FRONTEND_ORIGINS ||
+  process.env.FRONTEND_URL ||
+  "http://localhost:3000"
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: {
+      policy: "cross-origin",
+    },
+  })
+);
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Origin not allowed by CORS"));
+    },
     credentials: true,
   })
 );
-app.use(express.json());
+app.use(cookieParser());
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/", (req, res) => {
   res.json({
@@ -41,6 +73,7 @@ app.get("/", (req, res) => {
 });
 app.use("/api/finance", financeRoutes);
 app.use("/api/user-management", userManagementRoutes);
+app.use("/api/page-settings", pageSettingsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);
@@ -65,8 +98,27 @@ app.use("/api/support", supportRoutes);
 
 app.use("/api/payouts", payoutRoutes);
 
+app.use((error, req, res, next) => {
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    console.error(error);
+  }
+
+  res.status(500).json({
+    success: false,
+    message: "Internal server error",
+  });
+});
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+
+

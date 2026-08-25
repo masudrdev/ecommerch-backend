@@ -13,12 +13,18 @@ import {
   updateMyProfile,
 } from "../controllers/auth.controller.js";
 import { protect, allowRoles } from "../middlewares/auth.middleware.js";
+import { requireTrustedOrigin } from "../middlewares/trustedOrigin.middleware.js";
+import {
+  authSensitiveLimiter,
+  loginLimiter,
+  refreshLimiter,
+} from "../middlewares/authRateLimit.middleware.js";
 const router = express.Router();
 
-router.post("/register", register);
-router.post("/verify-email", verifyEmail);
-router.post("/resend-verification-code", resendVerificationCode);
-router.post("/login", login);
+router.post("/register", authSensitiveLimiter, register);
+router.post("/verify-email", authSensitiveLimiter, verifyEmail);
+router.post("/resend-verification-code", authSensitiveLimiter, resendVerificationCode);
+router.post("/login", loginLimiter, login);
 router.get("/me", protect, (req, res) => {
   res.json({
     success: true,
@@ -34,13 +40,14 @@ router.get("/admin-test", protect, allowRoles("ADMIN", "SUPER_ADMIN"),
     });
   }
 );
-router.post("/forgot-password", forgotPassword);
-router.post("/verify-reset-otp", verifyResetOtp);
-router.post("/reset-password", resetPassword);
+router.post("/forgot-password", authSensitiveLimiter, forgotPassword);
+router.post("/verify-reset-otp", authSensitiveLimiter, verifyResetOtp);
+router.post("/reset-password", authSensitiveLimiter, resetPassword);
 
 router.patch("/profile", protect, updateMyProfile);
 router.patch("/update-password", protect, updatePassword);
-router.post("/refresh-token", refreshToken);
-router.post("/logout", protect, logout);
+router.post("/refresh-token", requireTrustedOrigin, refreshLimiter, refreshToken);
+router.post("/logout", requireTrustedOrigin, logout);
 
 export default router;
+

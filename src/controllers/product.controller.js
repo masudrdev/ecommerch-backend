@@ -233,6 +233,7 @@ export const getProducts = async (req, res) => {
       page = 1,
       limit = 12,
       featured,
+      section,
     } = req.query;
 
     const pageNumber = Number(page);
@@ -246,6 +247,23 @@ export const getProducts = async (req, res) => {
     if (featured === "true") {
       where.isFeatured = true;
     }
+
+    const sectionNames = ["flash-sale", "best-selling", "featured", "new-arrivals"];
+    if (section && !sectionNames.includes(section)) {
+      return res.status(400).json({ success: false, message: "Invalid product section" });
+    }
+
+    if (section === "flash-sale") {
+      const now = new Date();
+      where.salePrice = { not: null };
+      where.AND = [
+        { OR: [{ flashSaleStart: null }, { flashSaleStart: { lte: now } }] },
+        { OR: [{ flashSaleEnd: null }, { flashSaleEnd: { gt: now } }] },
+      ];
+    }
+
+    if (section === "best-selling") where.reviews = { some: {} };
+    if (section === "featured") where.isFeatured = true;
 
     if (search) {
       where.OR = [
@@ -330,6 +348,9 @@ export const getProducts = async (req, res) => {
     if (sort === "oldest") {
       orderBy = { createdAt: "asc" };
     }
+
+    if (section === "best-selling") orderBy = { reviews: { _count: "desc" } };
+    if (section === "new-arrivals") orderBy = { createdAt: "desc" };
 
     const [products, total] = await Promise.all([
       prisma.product.findMany({

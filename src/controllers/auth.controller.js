@@ -2,6 +2,13 @@ import bcrypt from "bcryptjs";
 import sendVerificationEmail from "../utils/sendVerificationEmail.js";
 import prisma from "../lib/prisma.js";
 import jwt from "jsonwebtoken";
+import {
+  clearRefreshCookie,
+  hashRefreshToken,
+  setRefreshCookie,
+  signAccessToken,
+  signRefreshToken,
+} from "../utils/authTokens.js";
 import generateCode from "../utils/generateCode.js";
 import {
   registerSchema,
@@ -51,8 +58,6 @@ export const register = async (req, res) => {
       },
     });
 
-    console.log("Verification Code:", code);
-
     await sendVerificationEmail({
       email: data.email,
       code,
@@ -77,15 +82,7 @@ export const verifyEmail = async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { email },
     });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    if (user.emailVerificationCode !== code) {
+    if (!user || user.emailVerificationCode !== code) {
       return res.status(400).json({
         success: false,
         message: "Invalid verification code",
@@ -120,77 +117,63 @@ export const verifyEmail = async (req, res) => {
   }
 };
 export const resendVerificationCode = async (req, res) => {
+  const genericResponse = {
+    success: true,
+    message:
+      "If the account is eligible, a new verification code has been sent.",
+  };
+
   try {
-    const { email } = req.body;
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const user = email
+      ? await prisma.user.findUnique({ where: { email } })
+      : null;
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
+    if (user && !user.isEmailVerified) {
+      const code = generateCode();
+      await prisma.user.update({
+        where: { email },
+        data: {
+          emailVerificationCode: code,
+          emailVerificationExpires: new Date(Date.now() + 10 * 60 * 1000),
+        },
       });
+
+      try {
+        await sendVerificationEmail({ email, code });
+      } catch (error) {
+        console.error(
+          "Verification email delivery failed:",
+          error?.message || "Unknown mail error"
+        );
+      }
     }
 
-    if (user.isEmailVerified) {
-      return res.status(400).json({
-        success: false,
-        message: "Email already verified",
-      });
-    }
-
-    const code = generateCode();
-
-    await prisma.user.update({
-      where: { email },
-      data: {
-        emailVerificationCode: code,
-        emailVerificationExpires: new Date(Date.now() + 10 * 60 * 1000),
-      },
-    });
-    console.log("Verification Code:", code);
-    await sendVerificationEmail({
-      email,
-      code,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "New verification code sent successfully",
-    });
-  } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return res.status(200).json(genericResponse);
+  } catch {
+    return res.status(200).json(genericResponse);
   }
 };
 export const login = async (req, res) => {
   try {
     const data = loginSchema.parse(req.body);
+    const identifier = data.emailOrUsername.trim();
 
     const user = await prisma.user.findFirst({
       where: {
         OR: [
-          { email: data.emailOrUsername },
-          { username: data.emailOrUsername },
+          { email: identifier.toLowerCase() },
+          { username: identifier },
         ],
       },
     });
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "Invalid email/username or password",
-      });
-    }
+    const isPasswordMatch = user
+      ? await bcrypt.compare(data.password, user.password)
+      : false;
 
-    const isPasswordMatch = await bcrypt.compare(data.password, user.password);
-
-    if (!isPasswordMatch) {
-      return res.status(400).json({
+    if (!user || !isPasswordMatch) {
+      return res.status(401).json({
         success: false,
         message: "Invalid email/username or password",
       });
@@ -210,33 +193,22 @@ export const login = async (req, res) => {
       });
     }
 
+    const accessToken = signAccessToken(user);
+    const refreshToken = signRefreshToken(user);
 
-    const accessToken = jwt.sign(
-      {
-        id: user.id,
-        role: user.role,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "60m" }
-    );
-
-    const refreshToken = jwt.sign(
-      {
-        id: user.id,
-      },
-      process.env.JWT_REFRESH_SECRET,
-      { expiresIn: "7d" }
-    );
     await prisma.user.update({
-  where: { id: user.id },
-  data: { refreshToken },
-});
+      where: { id: user.id },
+      data: {
+        refreshToken: hashRefreshToken(refreshToken),
+      },
+    });
+
+    setRefreshCookie(res, refreshToken);
 
     return res.status(200).json({
       success: true,
       message: "Login successful",
       accessToken,
-      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -248,50 +220,56 @@ export const login = async (req, res) => {
   } catch (error) {
     return res.status(400).json({
       success: false,
-      message: error.message,
+      message:
+        process.env.NODE_ENV === "production"
+          ? "Login failed"
+          : error.message,
     });
   }
 };
 export const forgotPassword = async (req, res) => {
+  const genericResponse = {
+    success: true,
+    message:
+      "If an account exists for this email, a password reset code has been sent.",
+  };
+
   try {
     const data = forgotPasswordSchema.parse(req.body);
-
     const user = await prisma.user.findUnique({
       where: { email: data.email },
     });
 
-    if (!user) {
-      return res.status(404).json({
+    if (user) {
+      const code = generateCode();
+      await prisma.user.update({
+        where: { email: data.email },
+        data: {
+          resetPasswordCode: code,
+          resetPasswordExpires: new Date(Date.now() + 10 * 60 * 1000),
+        },
+      });
+
+      try {
+        await sendVerificationEmail({ email: data.email, code });
+      } catch (error) {
+        console.error(
+          "Password reset email delivery failed:",
+          error?.message || "Unknown mail error"
+        );
+      }
+    }
+
+    return res.status(200).json(genericResponse);
+  } catch (error) {
+    if (error?.name === "ZodError") {
+      return res.status(400).json({
         success: false,
-        message: "User not found",
+        message: "Valid email is required",
       });
     }
 
-    const code = generateCode();
-
-    await prisma.user.update({
-      where: { email: data.email },
-      data: {
-        resetPasswordCode: code,
-        resetPasswordExpires: new Date(Date.now() + 10 * 60 * 1000),
-      },
-    });
-
-    console.log("Reset Password Code:", code);
-    await sendVerificationEmail({
-      email: data.email,
-      code,
-    });
-
-    return res.json({
-      success: true,
-      message: "Password reset code sent successfully",
-    });
-  } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return res.status(200).json(genericResponse);
   }
 };
 export const verifyResetOtp = async (req, res) => {
@@ -410,70 +388,119 @@ export const updatePassword = async (req, res) => {
 };
 export const refreshToken = async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const token =
+      req.cookies?.refreshToken ||
+      req.body?.refreshToken;
 
-    if (!refreshToken) {
+    if (!token) {
+      clearRefreshCookie(res);
       return res.status(401).json({
         success: false,
-        message: "Refresh token is required",
+        message: "Refresh session is required",
       });
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_REFRESH_SECRET
+    );
+
+    if (
+      decoded.tokenType &&
+      decoded.tokenType !== "refresh"
+    ) {
+      throw new Error("Invalid token purpose");
+    }
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
     });
 
-    if (!user || user.refreshToken !== refreshToken) {
+    const storedTokenMatches =
+      user &&
+      (user.refreshToken === hashRefreshToken(token) ||
+        user.refreshToken === token);
+
+    if (
+      !user ||
+      !storedTokenMatches ||
+      user.status !== "ACTIVE"
+    ) {
+      clearRefreshCookie(res);
       return res.status(403).json({
         success: false,
-        message: "Invalid refresh token",
+        message: "Invalid refresh session",
       });
     }
 
-    if (user.status !== "ACTIVE") {
-      return res.status(403).json({
-        success: false,
-        message: "Account is not active",
-      });
-    }
+    const newRefreshToken = signRefreshToken(user);
+    const newAccessToken = signAccessToken(user);
 
-    const newAccessToken = jwt.sign(
-      {
-        id: user.id,
-        role: user.role,
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        refreshToken:
+          hashRefreshToken(newRefreshToken),
       },
-      process.env.JWT_SECRET,
-      { expiresIn: "15m" }
-    );
+    });
+
+    setRefreshCookie(res, newRefreshToken);
 
     return res.json({
       success: true,
       accessToken: newAccessToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+      },
     });
-  } catch (error) {
+  } catch {
+    clearRefreshCookie(res);
     return res.status(403).json({
       success: false,
-      message: "Invalid or expired refresh token",
+      message: "Invalid or expired refresh session",
     });
   }
 };
+
 export const logout = async (req, res) => {
   try {
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data: { refreshToken: null },
-    });
+    const token = req.cookies?.refreshToken;
+    let userId = req.user?.id;
 
-    res.json({
+    if (!userId && token) {
+      try {
+        const decoded = jwt.verify(
+          token,
+          process.env.JWT_REFRESH_SECRET
+        );
+        userId = decoded.id;
+      } catch {
+        userId = null;
+      }
+    }
+
+    if (userId) {
+      await prisma.user.updateMany({
+        where: { id: userId },
+        data: { refreshToken: null },
+      });
+    }
+
+    clearRefreshCookie(res);
+
+    return res.json({
       success: true,
       message: "Logout successful",
     });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message,
+  } catch {
+    clearRefreshCookie(res);
+    return res.status(200).json({
+      success: true,
+      message: "Logout successful",
     });
   }
 };
@@ -512,3 +539,6 @@ export const updateMyProfile = async (req, res) => {
     });
   }
 };
+
+
+

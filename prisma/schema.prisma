@@ -489,6 +489,20 @@ model FinanceTransaction {
   @@index([createdAt])
 }
 
+model PageContent {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  title        String
+  contentHtml  String
+  sectionsJson String?
+  updatedById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([key])
+  @@index([updatedAt])
+}
+
 model PlatformSetting {
   id                     String         @id @default("GLOBAL")
   defaultCommissionType  CommissionType @default(PERCENTAGE)
