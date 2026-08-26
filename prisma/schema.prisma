@@ -538,6 +538,15 @@ model PlatformSetting {
   defaultCommissionValue Float          @default(0)
   heroAutoSlide          Boolean        @default(true)
   heroIntervalMs         Int            @default(5000)
+  fullLogoUrl            String?
+  fullLogoPublicId       String?
+  compactLogoUrl         String?
+  compactLogoPublicId    String?
+  faviconUrl             String?
+  faviconPublicId        String?
+  phone                  String?
+  supportEmail           String?
+  location               String?
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 }
@@ -702,6 +711,7 @@ enum PayoutStatus {
   REJECTED
   CANCELLED
 }
+
 
 
 

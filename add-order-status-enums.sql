@@ -1,4 +1,4 @@
-ALTER TYPE "OrderItemStatus";
+ALTER TYPE "OrderItemStatus"
 ADD VALUE IF NOT EXISTS 'DELIVERED';
 
 ALTER TYPE "OrderItemStatus"

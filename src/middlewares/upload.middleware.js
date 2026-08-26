@@ -51,3 +51,27 @@ export const uploadHeroImage = (req, res, next) => {
     return res.status(400).json({ success: false, message });
   });
 };
+const siteBrandingUpload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 3 },
+  fileFilter: (_req, file, callback) => {
+    if (!heroImageMimeTypes.has(file.mimetype)) {
+      return callback(new multer.MulterError("LIMIT_UNEXPECTED_FILE", file.fieldname));
+    }
+    callback(null, true);
+  },
+});
+
+export const uploadSiteBranding = (req, res, next) => {
+  siteBrandingUpload.fields([
+    { name: "fullLogo", maxCount: 1 },
+    { name: "compactLogo", maxCount: 1 },
+    { name: "favicon", maxCount: 1 },
+  ])(req, res, (error) => {
+    if (!error) return next();
+    const message = error.code === "LIMIT_FILE_SIZE"
+      ? "Branding images must be 5 MB or smaller"
+      : "Please upload JPG, PNG, or WebP images only";
+    return res.status(400).json({ success: false, message });
+  });
+};

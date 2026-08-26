@@ -23,6 +23,7 @@ import financeRoutes from "./routes/finance.routes.js";
 import userManagementRoutes from "./routes/userManagement.routes.js";
 import pageSettingsRoutes from "./routes/pageSettings.routes.js";
 import heroSlideRoutes from "./routes/heroSlide.routes.js";
+import siteSettingsRoutes from "./routes/siteSettings.routes.js";
 import { startVendorContactChangeCleanup } from "./services/vendorContactCleanup.service.js";
 
 
@@ -77,6 +78,7 @@ app.use("/api/finance", financeRoutes);
 app.use("/api/user-management", userManagementRoutes);
 app.use("/api/page-settings", pageSettingsRoutes);
 app.use("/api/hero-slides", heroSlideRoutes);
+app.use("/api/site-settings", siteSettingsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);
@@ -123,6 +125,7 @@ app.listen(PORT, () => {
   startVendorContactChangeCleanup();
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
