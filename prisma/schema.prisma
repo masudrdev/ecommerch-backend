@@ -185,6 +185,16 @@ model Vendor {
   shopName                       String
   shopSlug                       String               @unique
   shopLogo                       String?
+  officeAddress                  String?
+  officeDistrict                 String?
+  officeUpazila                  String?
+  officeVillage                  String?
+  pendingEmail                   String?
+  pendingPhone                   String?
+  contactChangeCode              String?
+  contactChangeExpiresAt         DateTime?
+  contactChangeAttempts          Int                  @default(0)
+  contactChangeLastSentAt        DateTime?
   shopBanner                     String?
   description                    String?
   status                         VendorStatus         @default(PENDING)
@@ -358,6 +368,7 @@ model OrderItem {
   returnRequestedAt DateTime?
   returnResolvedAt  DateTime?
   deliveryCharge    Float           @default(0)
+  deliveryType      String?
   shippedAt         DateTime?
   order             Order           @relation(fields: [orderId], references: [id])
   product           Product         @relation(fields: [productId], references: [id])
@@ -503,10 +514,30 @@ model PageContent {
   @@index([updatedAt])
 }
 
+model HeroSlide {
+  id                  String   @id @default(uuid())
+  title               String?
+  subtitle            String?
+  imageUrl             String
+  imagePublicId        String?
+  primaryButtonText    String
+  primaryButtonUrl     String
+  secondaryButtonText String?
+  secondaryButtonUrl  String?
+  isActive             Boolean  @default(true)
+  displayOrder         Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([isActive, displayOrder])
+  @@index([displayOrder])
+}
 model PlatformSetting {
   id                     String         @id @default("GLOBAL")
   defaultCommissionType  CommissionType @default(PERCENTAGE)
   defaultCommissionValue Float          @default(0)
+  heroAutoSlide          Boolean        @default(true)
+  heroIntervalMs         Int            @default(5000)
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 }
@@ -671,3 +702,6 @@ enum PayoutStatus {
   REJECTED
   CANCELLED
 }
+
+
+

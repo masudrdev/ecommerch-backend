@@ -452,6 +452,76 @@ export const updateFeaturedProduct = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message || "Unable to update featured product" });
   }
 };
+export const getRelatedProductsBySlug = async (req, res) => {
+  try {
+    const currentProduct = await prisma.product.findUnique({
+      where: { slug: req.params.slug },
+      select: {
+        id: true,
+        categoryId: true,
+        status: true,
+      },
+    });
+
+    if (!currentProduct || currentProduct.status !== "APPROVED") {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    if (!currentProduct.categoryId) {
+      return res.json({
+        success: true,
+        products: [],
+      });
+    }
+
+    const products = await prisma.product.findMany({
+      where: {
+        status: "APPROVED",
+        categoryId: currentProduct.categoryId,
+        id: { not: currentProduct.id },
+      },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        price: true,
+        salePrice: true,
+        images: {
+          orderBy: [
+            { isMain: "desc" },
+            { id: "asc" },
+          ],
+          take: 1,
+          select: {
+            url: true,
+            isMain: true,
+          },
+        },
+        reviews: {
+          select: {
+            rating: true,
+          },
+        },
+
+      },
+      orderBy: { createdAt: "desc" },
+      take: 12,
+    });
+
+    return res.json({
+      success: true,
+      products,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 export const getProductBySlug = async (req, res) => {
   try {
     const product = await prisma.product.findUnique({
@@ -1491,5 +1561,7 @@ export const getAdminProducts = async (req, res) => {
 //     });
 //   }
 // };
+
+
 
 

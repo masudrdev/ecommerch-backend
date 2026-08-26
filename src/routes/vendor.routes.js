@@ -7,8 +7,13 @@ import {
   getVendorDashboard,
   getVendorSalesChart,
   getAllVendors,
+  updateMyVendorProfile,
+  requestVendorContactChange,
+  verifyVendorContactChange,
 } from "../controllers/vendor.controller.js";
 import { protect, allowRoles } from "../middlewares/auth.middleware.js";
+import { authSensitiveLimiter } from "../middlewares/authRateLimit.middleware.js";
+import { uploadVendorLogo } from "../middlewares/upload.middleware.js";
 
 const router = express.Router();
 
@@ -26,6 +31,27 @@ router.get(
   protect,
   allowRoles("VENDOR"),
   getMyVendorProfile
+);
+router.patch(
+  "/me",
+  protect,
+  allowRoles("VENDOR"),
+  uploadVendorLogo,
+  updateMyVendorProfile
+);
+router.post(
+  "/me/contact-change/request",
+  protect,
+  allowRoles("VENDOR"),
+  authSensitiveLimiter,
+  requestVendorContactChange
+);
+router.post(
+  "/me/contact-change/verify",
+  protect,
+  allowRoles("VENDOR"),
+  authSensitiveLimiter,
+  verifyVendorContactChange
 );
 router.get(
   "/",

@@ -6,6 +6,7 @@ import {
   getFeaturedProductManagement,
   updateFeaturedProduct,
   getProductBySlug,
+  getRelatedProductsBySlug,
   updateProductStatus,
   uploadProductImages,
   addProductVariants,
@@ -67,6 +68,7 @@ router.delete(
   deleteProductImage
 );
 
+router.get("/:slug/related", getRelatedProductsBySlug);
 router.get("/:slug", getProductBySlug);
 router.patch("/:id/status", protect, allowRoles("ADMIN", "SUPER_ADMIN"), updateProductStatus);
 router.patch("/:id", protect, allowRoles("VENDOR", "ADMIN", "SUPER_ADMIN"), updateProduct);

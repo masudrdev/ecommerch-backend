@@ -71,7 +71,6 @@ export const addToCart = async (req, res) => {
     });
   }
 };
-
 export const getCart = async (req, res) => {
   try {
     const cart = await prisma.cart.findUnique({
@@ -87,6 +86,7 @@ export const getCart = async (req, res) => {
                     id: true,
                     shopName: true,
                     shopSlug: true,
+                    officeDistrict: true,
                   },
                 },
               },
@@ -122,13 +122,20 @@ export const updateCartItem = async (req, res) => {
 
     const item = await prisma.cartItem.findUnique({
       where: { id: itemId },
-      include: { cart: true },
+      include: { cart: true, product: true },
     });
 
     if (!item || item.cart.userId !== req.user.id) {
       return res.status(404).json({
         success: false,
         message: "Cart item not found",
+      });
+    }
+
+    if (quantity > item.product.stock) {
+      return res.status(400).json({
+        success: false,
+        message: `Only ${item.product.stock} item(s) available in stock`,
       });
     }
 
@@ -210,3 +217,5 @@ export const clearCart = async (req, res) => {
     });
   }
 };
+
+

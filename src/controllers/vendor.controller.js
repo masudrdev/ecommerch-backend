@@ -1,6 +1,10 @@
 import prisma from "../lib/prisma.js";
 import { vendorRegisterSchema } from "../validations/vendor.validation.js";
 import { createNotification } from "../services/notification.service.js";
+import crypto from "crypto";
+import uploadToCloudinary from "../utils/uploadToCloudinary.js";
+import sendVendorContactChangeEmail from "../utils/sendVendorContactChangeEmail.js";
+import { scheduleVendorContactChangeCleanup } from "../services/vendorContactCleanup.service.js";
 
 export const registerVendor = async (req, res) => {
   try {
@@ -64,6 +68,8 @@ export const getMyVendorProfile = async (req, res) => {
             name: true,
             username: true,
             email: true,
+            phone: true,
+            isEmailVerified: true,
             role: true,
           },
         },
@@ -587,5 +593,160 @@ export const getAllVendors = async (req, res) => {
       success: false,
       message: error.message,
     });
+  }
+};
+
+const CONTACT_CODE_TTL_MS = 60 * 1000;
+const CONTACT_CODE_RESEND_MS = 60 * 1000;
+const CONTACT_CODE_MAX_ATTEMPTS = 5;
+const createContactCode = () => crypto.randomInt(100000, 1000000).toString();
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const isValidPhone = (value) => /^[+0-9][0-9\s-]{5,29}$/.test(value);
+const isRealImage = (file) => {
+  const bytes = file?.buffer;
+  if (!bytes || bytes.length < 12) return false;
+  if (file.mimetype === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (file.mimetype === "image/png") return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (file.mimetype === "image/webp") return bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP";
+  return false;
+};
+
+const vendorProfileSelect = {
+  id: true,
+  shopName: true,
+  shopSlug: true,
+  shopLogo: true,
+  officeAddress: true,
+  officeDistrict: true,
+  officeUpazila: true,
+  officeVillage: true,
+  status: true,
+  user: { select: { id: true, name: true, username: true, email: true, phone: true, role: true, isEmailVerified: true } },
+};
+
+export const updateMyVendorProfile = async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    const officeDistrict = String(req.body?.officeDistrict || "").trim();
+    const officeUpazila = String(req.body?.officeUpazila || "").trim();
+    const officeVillage = String(req.body?.officeVillage || "").trim();
+    if (name.length < 2 || name.length > 100) return res.status(400).json({ success: false, message: "Valid name is required" });
+    if ([officeDistrict, officeUpazila, officeVillage].some((value) => value.length > 120)) {
+      return res.status(400).json({ success: false, message: "Office address field is too long" });
+    }
+
+    const vendor = await prisma.vendor.findUnique({ where: { userId: req.user.id } });
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor profile not found" });
+
+    let shopLogo = vendor.shopLogo;
+    if (req.file) {
+      if (!isRealImage(req.file)) return res.status(400).json({ success: false, message: "Please upload a valid JPG, PNG, or WebP image" });
+      const uploaded = await uploadToCloudinary(req.file.buffer, "friendbazar/vendor-logos");
+      shopLogo = uploaded.secure_url;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: req.user.id }, data: { name } });
+      return tx.vendor.update({
+        where: { userId: req.user.id },
+        data: {
+          officeDistrict: officeDistrict || null,
+          officeUpazila: officeUpazila || null,
+          officeVillage: officeVillage || null,
+          shopLogo,
+        },
+        select: vendorProfileSelect,
+      });
+    });
+    return res.json({ success: true, message: "Vendor profile updated successfully", vendor: updated });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "production") console.error("Vendor profile update failed:", error?.message);
+    return res.status(500).json({ success: false, message: "Unable to update Vendor Profile" });
+  }
+};
+
+export const requestVendorContactChange = async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id }, include: { vendor: true } });
+    if (!user?.vendor) return res.status(404).json({ success: false, message: "Vendor profile not found" });
+    if (!user.isEmailVerified) return res.status(400).json({ success: false, message: "Your current email must be verified" });
+
+    const requestedEmail = req.body?.email == null ? user.email : String(req.body.email).trim().toLowerCase();
+    const requestedPhone = req.body?.phone == null ? (user.phone || "") : String(req.body.phone).trim();
+    const pendingEmail = requestedEmail !== user.email ? requestedEmail : null;
+    const pendingPhone = requestedPhone !== (user.phone || "") ? requestedPhone : null;
+    if (!pendingEmail && !pendingPhone) return res.status(400).json({ success: false, message: "No email or phone change detected" });
+    if (pendingEmail && !isValidEmail(pendingEmail)) return res.status(400).json({ success: false, message: "Valid email is required" });
+    if (pendingPhone && !isValidPhone(pendingPhone)) return res.status(400).json({ success: false, message: "Valid phone number is required" });
+    if (pendingEmail) {
+      const existing = await prisma.user.findFirst({ where: { email: pendingEmail, NOT: { id: user.id } }, select: { id: true } });
+      if (existing) return res.status(409).json({ success: false, message: "Email is already in use" });
+    }
+    if (user.vendor.contactChangeLastSentAt && Date.now() - user.vendor.contactChangeLastSentAt.getTime() < CONTACT_CODE_RESEND_MS) {
+      return res.status(429).json({ success: false, message: "Please wait before requesting another code" });
+    }
+
+    const code = createContactCode();
+    const expiresAt = new Date(Date.now() + CONTACT_CODE_TTL_MS);
+    await prisma.vendor.update({ where: { id: user.vendor.id }, data: {
+      pendingEmail, pendingPhone, contactChangeCode: code,
+      contactChangeExpiresAt: expiresAt, contactChangeAttempts: 0,
+      contactChangeLastSentAt: new Date(),
+    } });
+    scheduleVendorContactChangeCleanup(user.vendor.id, expiresAt);
+    try {
+      await sendVendorContactChangeEmail({ email: user.email, code });
+    } catch (error) {
+      await prisma.vendor.update({ where: { id: user.vendor.id }, data: {
+        pendingEmail: null, pendingPhone: null, contactChangeCode: null,
+        contactChangeExpiresAt: null, contactChangeAttempts: 0,
+        contactChangeLastSentAt: null,
+      } });
+      if (process.env.NODE_ENV !== "production") console.error("Vendor contact email delivery failed:", error?.message);
+      return res.status(502).json({ success: false, message: "Unable to send verification code" });
+    }
+    return res.json({ success: true, message: "Verification code sent to your current verified email" });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "production") console.error("Vendor contact change request failed:", error?.message);
+    return res.status(500).json({ success: false, message: "Unable to request contact change" });
+  }
+};
+
+export const verifyVendorContactChange = async (req, res) => {
+  try {
+    const code = String(req.body?.code || "").trim();
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ success: false, message: "Invalid verification code" });
+    const vendor = await prisma.vendor.findUnique({ where: { userId: req.user.id }, include: { user: true } });
+    if (!vendor?.contactChangeCode || (!vendor.pendingEmail && !vendor.pendingPhone)) return res.status(400).json({ success: false, message: "No pending contact change" });
+    if (!vendor.contactChangeExpiresAt || vendor.contactChangeExpiresAt <= new Date()) {
+      await prisma.vendor.update({ where: { id: vendor.id }, data: {
+        pendingEmail: null, pendingPhone: null, contactChangeCode: null,
+        contactChangeExpiresAt: null, contactChangeAttempts: 0, contactChangeLastSentAt: null,
+      } });
+      return res.status(400).json({ success: false, message: "Verification code expired" });
+    }
+    if (vendor.contactChangeAttempts >= CONTACT_CODE_MAX_ATTEMPTS) return res.status(429).json({ success: false, message: "Too many verification attempts. Request a new code" });
+    if (code !== vendor.contactChangeCode) {
+      await prisma.vendor.update({ where: { id: vendor.id }, data: { contactChangeAttempts: { increment: 1 } } });
+      return res.status(400).json({ success: false, message: "Invalid verification code" });
+    }
+    if (vendor.pendingEmail) {
+      const existing = await prisma.user.findFirst({ where: { email: vendor.pendingEmail, NOT: { id: req.user.id } }, select: { id: true } });
+      if (existing) return res.status(409).json({ success: false, message: "Email is already in use" });
+    }
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id: req.user.id }, data: {
+        ...(vendor.pendingEmail ? { email: vendor.pendingEmail } : {}),
+        ...(vendor.pendingPhone ? { phone: vendor.pendingPhone } : {}),
+      } });
+      return tx.vendor.update({ where: { id: vendor.id }, data: {
+        pendingEmail: null, pendingPhone: null, contactChangeCode: null,
+        contactChangeExpiresAt: null, contactChangeAttempts: 0, contactChangeLastSentAt: null,
+      }, select: vendorProfileSelect });
+    });
+    return res.json({ success: true, message: "Vendor contact information updated successfully", vendor: updated });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "production") console.error("Vendor contact verification failed:", error?.message);
+    return res.status(500).json({ success: false, message: "Unable to verify contact change" });
   }
 };

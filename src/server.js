@@ -22,6 +22,8 @@ import addressRoutes from "./routes/address.routes.js";
 import financeRoutes from "./routes/finance.routes.js";
 import userManagementRoutes from "./routes/userManagement.routes.js";
 import pageSettingsRoutes from "./routes/pageSettings.routes.js";
+import heroSlideRoutes from "./routes/heroSlide.routes.js";
+import { startVendorContactChangeCleanup } from "./services/vendorContactCleanup.service.js";
 
 
 dotenv.config();
@@ -74,6 +76,7 @@ app.get("/", (req, res) => {
 app.use("/api/finance", financeRoutes);
 app.use("/api/user-management", userManagementRoutes);
 app.use("/api/page-settings", pageSettingsRoutes);
+app.use("/api/hero-slides", heroSlideRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);
@@ -117,6 +120,7 @@ app.use((error, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
+  startVendorContactChangeCleanup();
   console.log(`Server running on port ${PORT}`);
 });
 

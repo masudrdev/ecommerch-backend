@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma.js";
 import createActivityLog from "../utils/createActivityLog.js";
 import createNotification from "../utils/createNotification.js";
+import { calculateDeliveryCharge, DELIVERY_TYPES } from "../utils/deliveryCharge.js";
 const generateOrderNumber = () => {
   return "FB-" + Date.now();
 };
@@ -44,20 +45,6 @@ const calculateCommissionSnapshot = ({
     vendorEarning,
   };
 };
-const isDhakaDistrict = (district) => {
-  const normalizedDistrict = String(
-    district || ""
-  )
-    .trim()
-    .toLowerCase();
-
-  return [
-    "dhaka",
-    "ঢাকা",
-    "dhaka district",
-  ].includes(normalizedDistrict);
-};
-
 
 const calculateOrderFinancials = (items = []) => {
   if (!Array.isArray(items)) {
@@ -183,6 +170,7 @@ export const createOrder = async (req, res) => {
       address,
       district,
       upazila,
+      deliverySelections,
     } = req.body;
 
     const orderUserId =
@@ -271,15 +259,47 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    /*
-     * Dhaka হলে Product.deliveryCharge।
-     * Dhaka-এর বাইরে হলে:
-     *
-     * Product.deliveryCharge
-     * + Product.outsideDistrictExtraCharge
-     */
-    const outsideDhaka =
-      !isDhakaDistrict(district);
+    if (!Array.isArray(deliverySelections)) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery option is required for every cart item",
+      });
+    }
+
+    const deliverySelectionMap = new Map();
+
+    for (const selection of deliverySelections) {
+      const cartItemId = String(selection?.cartItemId || "");
+      const deliveryType = String(selection?.deliveryType || "").toUpperCase();
+
+      if (
+        !cartItemId ||
+        deliverySelectionMap.has(cartItemId) ||
+        !Object.values(DELIVERY_TYPES).includes(deliveryType)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid delivery selection",
+        });
+      }
+
+      deliverySelectionMap.set(cartItemId, deliveryType);
+    }
+
+    const cartItemIds = new Set(cart.items.map((item) => item.id));
+    const hasUnexpectedSelection = [...deliverySelectionMap.keys()].some(
+      (itemId) => !cartItemIds.has(itemId)
+    );
+
+    if (
+      hasUnexpectedSelection ||
+      deliverySelectionMap.size !== cart.items.length
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery option is required for every cart item",
+      });
+    }
 
     let productTotal = 0;
     let totalDeliveryFee = 0;
@@ -351,22 +371,11 @@ export const createOrder = async (req, res) => {
        * quantity 3 হলেও delivery charge
        * 3 দিয়ে multiply হবে না।
        */
-      const baseDeliveryCharge =
-        Number(
-          product.deliveryCharge || 0
-        );
-
-      const outsideDistrictCharge =
-        outsideDhaka
-          ? Number(
-              product.outsideDistrictExtraCharge ||
-                0
-            )
-          : 0;
-
-      const itemDeliveryCharge =
-        baseDeliveryCharge +
-        outsideDistrictCharge;
+      const deliveryType = deliverySelectionMap.get(cartItem.id);
+      const itemDeliveryCharge = calculateDeliveryCharge(
+        product,
+        deliveryType
+      );
 
       const commission =
         calculateCommissionSnapshot({
@@ -404,6 +413,8 @@ export const createOrder = async (req, res) => {
          */
         deliveryCharge:
           itemDeliveryCharge,
+
+        deliveryType,
 
         /*
          * Order তৈরি হওয়ার সময় এখনো ship হয়নি।
@@ -4849,3 +4860,5 @@ export const updateOrderItemReturnByAdmin = async (
     });
   }
 };
+
+

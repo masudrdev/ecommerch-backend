@@ -506,6 +506,16 @@ export const logout = async (req, res) => {
 };
 export const updateMyProfile = async (req, res) => {
   try {
+    if (req.user.role === "VENDOR" && (
+      Object.prototype.hasOwnProperty.call(req.body || {}, "email") ||
+      Object.prototype.hasOwnProperty.call(req.body || {}, "phone")
+    )) {
+      return res.status(403).json({
+        success: false,
+        message: "Vendor email and phone changes require verification",
+      });
+    }
+
     const { name, phone, avatar } = req.body;
 
     const user = await prisma.user.update({
