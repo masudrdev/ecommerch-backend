@@ -1,6 +1,7 @@
 import express from "express";
 import {
   registerVendor,
+  getMyVendorApplication,
   getMyVendorProfile,
   approveVendor,
   updateVendorStatus,
@@ -17,10 +18,17 @@ import { uploadVendorLogo } from "../middlewares/upload.middleware.js";
 
 const router = express.Router();
 
+router.get(
+  "/application",
+  protect,
+  allowRoles("CUSTOMER"),
+  getMyVendorApplication
+);
 router.post(
   "/register",
   protect,
   allowRoles("CUSTOMER"),
+  uploadVendorLogo,
   registerVendor
 );
 

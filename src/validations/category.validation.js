@@ -6,3 +6,6 @@ export const categorySchema = z.object({
   image: z.string().optional(),
   parentId: z.string().optional(),
 });
+export const categoryNameUpdateSchema = z.object({
+  name: z.string().trim().min(2, "Category name is required"),
+});

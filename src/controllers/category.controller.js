@@ -1,5 +1,8 @@
 import prisma from "../lib/prisma.js";
-import { categorySchema } from "../validations/category.validation.js";
+import {
+  categoryNameUpdateSchema,
+  categorySchema,
+} from "../validations/category.validation.js";
 
 const makeSlug = (text) => {
   return String(text || "")
@@ -69,6 +72,48 @@ export const createCategory = async (req, res) => {
   }
 };
 
+export const updateCategoryName = async (req, res) => {
+  try {
+    const categoryId = String(req.params.id || "").trim();
+
+    if (!categoryId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid category ID",
+      });
+    }
+
+    const data = categoryNameUpdateSchema.parse(req.body);
+
+    const existingCategory = await prisma.category.findUnique({
+      where: { id: categoryId },
+      select: { id: true },
+    });
+
+    if (!existingCategory) {
+      return res.status(404).json({
+        success: false,
+        message: "Category not found",
+      });
+    }
+
+    const category = await prisma.category.update({
+      where: { id: categoryId },
+      data: { name: data.name },
+    });
+
+    return res.json({
+      success: true,
+      message: "Category updated successfully",
+      category,
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 export const getCategories = async (req, res) => {
   try {
     const allCategories = await prisma.category.findMany({

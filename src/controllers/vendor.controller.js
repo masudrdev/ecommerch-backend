@@ -3,57 +3,47 @@ import { vendorRegisterSchema } from "../validations/vendor.validation.js";
 import { createNotification } from "../services/notification.service.js";
 import crypto from "crypto";
 import uploadToCloudinary from "../utils/uploadToCloudinary.js";
+import deleteFromCloudinary from "../utils/deleteFromCloudinary.js";
 import sendVendorContactChangeEmail from "../utils/sendVendorContactChangeEmail.js";
 import { scheduleVendorContactChangeCleanup } from "../services/vendorContactCleanup.service.js";
 
 export const registerVendor = async (req, res) => {
+  let uploadedLogo = null;
   try {
     const data = vendorRegisterSchema.parse(req.body);
-
-
-
-    const existingVendor = await prisma.vendor.findUnique({
-      where: { userId: req.user.id },
-    });
-
-    if (existingVendor) {
-      return res.status(400).json({
-        success: false,
-        message: "Vendor profile already exists",
-      });
-    }
-
-    const existingSlug = await prisma.vendor.findUnique({
-      where: { shopSlug: data.shopSlug },
-    });
-
-    if (existingSlug) {
-      return res.status(400).json({
-        success: false,
-        message: "Shop slug already exists",
-      });
-    }
+    const existingVendor = await prisma.vendor.findUnique({ where: { userId: req.user.id } });
+    if (existingVendor) return res.status(409).json({ success: false, message: "Vendor application already exists", vendor: existingVendor });
+    const existingSlug = await prisma.vendor.findUnique({ where: { shopSlug: data.shopSlug } });
+    if (existingSlug) return res.status(409).json({ success: false, message: "Shop slug already exists" });
+    if (req.file && !isRealImage(req.file)) return res.status(400).json({ success: false, message: "Please upload a valid JPG, PNG, or WebP Vendor logo" });
+    if (req.file) uploadedLogo = await uploadToCloudinary(req.file.buffer, "friendbazar/vendor-logos");
 
     const vendor = await prisma.vendor.create({
       data: {
         userId: req.user.id,
         shopName: data.shopName,
         shopSlug: data.shopSlug,
-        description: data.description,
+        description: data.description || null,
+        officeDistrict: data.officeDistrict || null,
+        officeUpazila: data.officeUpazila || null,
+        officeVillage: data.officeVillage || null,
+        shopLogo: uploadedLogo?.secure_url || null,
         status: "PENDING",
       },
     });
-
-    res.status(201).json({
-      success: true,
-      message: "Vendor profile created. Waiting for admin approval.",
-      vendor,
-    });
+    return res.status(201).json({ success: true, message: "Vendor application submitted. Waiting for admin approval.", vendor });
   } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    if (uploadedLogo?.public_id) await deleteFromCloudinary(uploadedLogo.public_id).catch(() => null);
+    return res.status(400).json({ success: false, message: error?.issues?.[0]?.message || error.message });
+  }
+};
+
+export const getMyVendorApplication = async (req, res) => {
+  try {
+    const vendor = await prisma.vendor.findUnique({ where: { userId: req.user.id } });
+    return res.json({ success: true, vendor });
+  } catch {
+    return res.status(500).json({ success: false, message: "Unable to load Vendor application" });
   }
 };
 
@@ -95,49 +85,43 @@ export const getMyVendorProfile = async (req, res) => {
   }
 };
 
+const applyVendorStatus = async (vendorId, status) => prisma.$transaction(async (tx) => {
+  const existing = await tx.vendor.findUnique({ where: { id: vendorId }, select: { id: true, userId: true } });
+  if (!existing) throw new Error("Vendor not found");
+  const vendor = await tx.vendor.update({ where: { id: vendorId }, data: { status } });
+  await tx.user.update({
+    where: { id: existing.userId },
+    data: { role: status === "APPROVED" ? "VENDOR" : "CUSTOMER" },
+  });
+  return vendor;
+});
+
 export const approveVendor = async (req, res) => {
   try {
-    const { id } = req.params;
-
-    const vendor = await prisma.vendor.update({
-      where: { id },
-      data: {
-        status: "APPROVED",
-      },
-    });
-
-    res.json({
-      success: true,
-      message: "Vendor approved successfully",
-      vendor,
-    });
+    const vendor = await applyVendorStatus(req.params.id, "APPROVED");
+    await createNotification({ userId: vendor.userId, title: "Vendor Approved", message: "Your vendor account has been approved.", type: "VENDOR_APPROVED", link: "/dashboard" });
+    return res.json({ success: true, message: "Vendor approved successfully", vendor });
   } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message,
-    });
+    return res.status(400).json({ success: false, message: error.message });
   }
 };
-export const updateVendorStatus = async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
 
-  const vendor = await prisma.vendor.update({
-    where: { id },
-    data: { status },
-  });
-await createNotification({
-  userId: vendor.userId,
-  title: "Vendor Approved",
-  message: "Your vendor account has been approved.",
-  type: "VENDOR_APPROVED",
-  link: "/vendor/dashboard",
-});
-  return res.json({
-    success: true,
-    vendor,
-  });
+export const updateVendorStatus = async (req, res) => {
+  try {
+    const status = String(req.body?.status || "").toUpperCase();
+    if (!["PENDING", "APPROVED", "REJECTED", "SUSPENDED"].includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid Vendor status" });
+    }
+    const vendor = await applyVendorStatus(req.params.id, status);
+    if (status === "APPROVED") {
+      await createNotification({ userId: vendor.userId, title: "Vendor Approved", message: "Your vendor account has been approved.", type: "VENDOR_APPROVED", link: "/dashboard" });
+    }
+    return res.json({ success: true, vendor, message: `Vendor status updated to ${status}` });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
 };
+
 export const getVendorDashboard = async (req, res) => {
   
   try {
@@ -750,3 +734,4 @@ export const verifyVendorContactChange = async (req, res) => {
     return res.status(500).json({ success: false, message: "Unable to verify contact change" });
   }
 };
+

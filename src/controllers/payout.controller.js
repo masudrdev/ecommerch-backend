@@ -475,14 +475,34 @@ export const getMyPayoutRequests = async (req, res) => {
       });
     }
 
-    const payouts = await prisma.payoutRequest.findMany({
-      where: {
-        vendorId: vendor.id,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
+    const [payoutRequests, deductions] = await Promise.all([
+      prisma.payoutRequest.findMany({
+        where: { vendorId: vendor.id },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.financeTransaction.findMany({
+        where: { vendorId: vendor.id, type: "ADMIN_DEDUCTION" },
+        select: { id: true, amount: true, description: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    const deductionHistory = deductions.map((transaction) => ({
+      id: `deduction-${transaction.id}`,
+      financeTransactionId: transaction.id,
+      entryType: "ADMIN_DEDUCTION",
+      isAdminDeduction: true,
+      amount: transaction.amount,
+      status: "DEDUCTED",
+      paymentMethod: null,
+      accountName: null,
+      accountNumber: null,
+      vendorNote: transaction.description,
+      createdAt: transaction.createdAt,
+    }));
+    const payouts = [...payoutRequests, ...deductionHistory].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 
     return res.status(200).json({
       success: true,

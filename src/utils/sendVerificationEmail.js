@@ -1,13 +1,26 @@
-import transporter from "../config/mail.js";
+import { sendResendEmail } from "../config/resend.js";
 
-const sendVerificationEmail = async ({ email, code }) => {
-  await transporter.sendMail({
-    from: "FriendBazar <no-reply@friendbazar.com>",
+const sendVerificationEmail = async ({
+  email,
+  code,
+  purpose = "verification",
+}) => {
+  const isPasswordReset = purpose === "password-reset";
+
+  await sendResendEmail({
     to: email,
-    subject: "Verify your FriendBazar account",
+    subject: isPasswordReset
+      ? "Reset your FriendBazar password"
+      : "Verify your FriendBazar account",
     html: `
-      <h2>FriendBazar Email Verification</h2>
-      <p>Your verification code is:</p>
+      <h2>${
+        isPasswordReset
+          ? "FriendBazar Password Reset"
+          : "FriendBazar Email Verification"
+      }</h2>
+      <p>Your ${
+        isPasswordReset ? "password reset" : "verification"
+      } code is:</p>
       <h1>${code}</h1>
       <p>This code will expire in 10 minutes.</p>
     `,

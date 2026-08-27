@@ -1,8 +1,7 @@
-import transporter from "../config/mail.js";
+import { sendResendEmail } from "../config/resend.js";
 
 const sendVendorContactChangeEmail = async ({ email, code }) => {
-  await transporter.sendMail({
-    from: "FriendBazar <no-reply@friendbazar.com>",
+  await sendResendEmail({
     to: email,
     subject: "Verify your Vendor Profile contact change",
     html: `

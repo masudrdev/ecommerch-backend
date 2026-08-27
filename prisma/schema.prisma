@@ -589,6 +589,7 @@ enum FinanceTransactionType {
   COMMISSION
   VENDOR_EARNING
   PAYOUT
+  ADMIN_DEDUCTION
 }
 
 enum FinanceTransactionStatus {
@@ -711,6 +712,7 @@ enum PayoutStatus {
   REJECTED
   CANCELLED
 }
+
 
 
 

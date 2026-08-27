@@ -1043,13 +1043,29 @@ export const getMyVendorProducts = async (req, res) => {
         brand: true,
         images: true,
         variants: true,
+        orderItems: {
+          where: {
+            order: {
+              orderStatus: { in: ["DELIVERED", "COMPLETED"] },
+            },
+          },
+          select: { quantity: true },
+        },
       },
       orderBy: { createdAt: "desc" },
     });
 
+    const productsWithSaleCount = products.map(({ orderItems, ...product }) => ({
+      ...product,
+      saleCount: orderItems.reduce(
+        (total, item) => total + Number(item.quantity || 0),
+        0
+      ),
+    }));
+
     res.json({
       success: true,
-      products,
+      products: productsWithSaleCount,
     });
   } catch (error) {
     res.status(500).json({
@@ -1463,9 +1479,35 @@ export const getAdminProducts = async (req, res) => {
       }),
     ]);
 
+    const productIds = products.map((product) => product.id);
+    const soldQuantities = productIds.length
+      ? await prisma.orderItem.groupBy({
+          by: ["productId"],
+          where: {
+            productId: { in: productIds },
+            order: {
+              orderStatus: { in: ["DELIVERED", "COMPLETED"] },
+            },
+          },
+          _sum: { quantity: true },
+        })
+      : [];
+
+    const soldQuantityByProduct = new Map(
+      soldQuantities.map((item) => [
+        item.productId,
+        Number(item._sum.quantity || 0),
+      ])
+    );
+
+    const productsWithTotalSale = products.map((product) => ({
+      ...product,
+      totalSale: soldQuantityByProduct.get(product.id) || 0,
+    }));
+
     return res.json({
       success: true,
-      products,
+      products: productsWithTotalSale,
       pagination: {
         total,
         page: pageNumber,
@@ -1561,6 +1603,8 @@ export const getAdminProducts = async (req, res) => {
 //     });
 //   }
 // };
+
+
 
 
 

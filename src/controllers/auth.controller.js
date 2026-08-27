@@ -251,7 +251,11 @@ export const forgotPassword = async (req, res) => {
       });
 
       try {
-        await sendVerificationEmail({ email: data.email, code });
+        await sendVerificationEmail({
+          email: data.email,
+          code,
+          purpose: "password-reset",
+        });
       } catch (error) {
         console.error(
           "Password reset email delivery failed:",
@@ -549,6 +553,7 @@ export const updateMyProfile = async (req, res) => {
     });
   }
 };
+
 
 
 
