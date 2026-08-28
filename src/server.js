@@ -24,7 +24,9 @@ import userManagementRoutes from "./routes/userManagement.routes.js";
 import pageSettingsRoutes from "./routes/pageSettings.routes.js";
 import heroSlideRoutes from "./routes/heroSlide.routes.js";
 import siteSettingsRoutes from "./routes/siteSettings.routes.js";
+import staffProfileRoutes from "./routes/staffProfile.routes.js";
 import { startVendorContactChangeCleanup } from "./services/vendorContactCleanup.service.js";
+import { startStaffContactChangeCleanup } from "./services/staffContactChangeCleanup.service.js";
 
 
 dotenv.config();
@@ -80,6 +82,7 @@ app.use("/api/page-settings", pageSettingsRoutes);
 app.use("/api/hero-slides", heroSlideRoutes);
 app.use("/api/site-settings", siteSettingsRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/staff-profile", staffProfileRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/brands", brandRoutes);
 
@@ -124,6 +127,7 @@ const PORT = Number(process.env.PORT) || 10000;
 
 app.listen(PORT, "0.0.0.0", () => {
   startVendorContactChangeCleanup();
+  startStaffContactChangeCleanup();
   console.log(`Server running on 0.0.0.0:${PORT}`);
 });
 

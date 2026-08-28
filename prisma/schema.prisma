@@ -45,6 +45,24 @@ model User {
   addresses                 UserAddress[]
   vendor                    Vendor?
   wishlists                 Wishlist[]
+  staffContactChange        StaffContactChange?
+}
+
+model StaffContactChange {
+  id                     String               @id @default(uuid())
+  userId                 String               @unique
+  purpose                ContactChangePurpose
+  codeHash               String
+  expiresAt              DateTime
+  attempts               Int                  @default(0)
+  lastSentAt             DateTime
+  authorizationHash      String?
+  authorizationExpiresAt DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  user                   User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
 }
 
 model OrderTimeline {
@@ -518,20 +536,21 @@ model HeroSlide {
   id                  String   @id @default(uuid())
   title               String?
   subtitle            String?
-  imageUrl             String
-  imagePublicId        String?
-  primaryButtonText    String
-  primaryButtonUrl     String
+  imageUrl            String
+  imagePublicId       String?
+  primaryButtonText   String
+  primaryButtonUrl    String
   secondaryButtonText String?
   secondaryButtonUrl  String?
-  isActive             Boolean  @default(true)
-  displayOrder         Int      @default(0)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  isActive            Boolean  @default(true)
+  displayOrder        Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   @@index([isActive, displayOrder])
   @@index([displayOrder])
 }
+
 model PlatformSetting {
   id                     String         @id @default("GLOBAL")
   defaultCommissionType  CommissionType @default(PERCENTAGE)
@@ -557,6 +576,11 @@ enum Role {
   SUPPORT_AGENT
   VENDOR
   CUSTOMER
+}
+
+enum ContactChangePurpose {
+  EMAIL_CHANGE
+  PHONE_CHANGE
 }
 
 enum UserStatus {
@@ -712,8 +736,3 @@ enum PayoutStatus {
   REJECTED
   CANCELLED
 }
-
-
-
-
-

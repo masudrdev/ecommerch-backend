@@ -1,12 +1,17 @@
 import prisma from "../lib/prisma.js";
 import { vendorRegisterSchema } from "../validations/vendor.validation.js";
 import { createNotification } from "../services/notification.service.js";
-import crypto from "crypto";
 import uploadToCloudinary from "../utils/uploadToCloudinary.js";
 import deleteFromCloudinary from "../utils/deleteFromCloudinary.js";
 import sendVendorContactChangeEmail from "../utils/sendVendorContactChangeEmail.js";
 import { scheduleVendorContactChangeCleanup } from "../services/vendorContactCleanup.service.js";
 import { isPhoneUniqueError, normalizePhone } from "../utils/phone.js";
+import {
+  CONTACT_CODE_TTL_MS,
+  CONTACT_CODE_RESEND_MS,
+  CONTACT_CODE_MAX_ATTEMPTS,
+  createContactChangeCode,
+} from "../utils/contactChangeVerification.js";
 
 export const registerVendor = async (req, res) => {
   let uploadedLogo = null;
@@ -581,10 +586,6 @@ export const getAllVendors = async (req, res) => {
   }
 };
 
-const CONTACT_CODE_TTL_MS = 60 * 1000;
-const CONTACT_CODE_RESEND_MS = 60 * 1000;
-const CONTACT_CODE_MAX_ATTEMPTS = 5;
-const createContactCode = () => crypto.randomInt(100000, 1000000).toString();
 const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const isValidPhone = (value) => /^[+0-9][0-9\s-]{5,29}$/.test(value);
 const isRealImage = (file) => {
@@ -675,7 +676,7 @@ export const requestVendorContactChange = async (req, res) => {
       return res.status(429).json({ success: false, message: "Please wait before requesting another code" });
     }
 
-    const code = createContactCode();
+    const code = createContactChangeCode();
     const expiresAt = new Date(Date.now() + CONTACT_CODE_TTL_MS);
     await prisma.vendor.update({ where: { id: user.vendor.id }, data: {
       pendingEmail, pendingPhone, contactChangeCode: code,

@@ -75,3 +75,24 @@ export const uploadSiteBranding = (req, res, next) => {
     return res.status(400).json({ success: false, message });
   });
 };
+
+const staffAvatarUpload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (!vendorLogoMimeTypes.has(file.mimetype)) {
+      return callback(new multer.MulterError("LIMIT_UNEXPECTED_FILE", file.fieldname));
+    }
+    callback(null, true);
+  },
+});
+
+export const uploadStaffAvatar = (req, res, next) => {
+  staffAvatarUpload.single("avatarFile")(req, res, (error) => {
+    if (!error) return next();
+    const message = error.code === "LIMIT_FILE_SIZE"
+      ? "Profile image must be 5 MB or smaller"
+      : "Please upload a JPG, PNG, or WebP image";
+    return res.status(400).json({ success: false, message });
+  });
+};
