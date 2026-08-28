@@ -6,6 +6,7 @@ import {
   managedUserSchema,
   managedVendorSchema,
 } from "../validations/userManagement.validation.js";
+import { isPhoneUniqueError, normalizePhone } from "../utils/phone.js";
 
 const USER_ROLES = {
   customers: "CUSTOMER",
@@ -40,18 +41,20 @@ const rejectProtectedFields = (body) => {
   return protectedFields.some((field) => Object.prototype.hasOwnProperty.call(body || {}, field));
 };
 
-const ensureUniqueAccount = async ({ email, username }) => {
+const ensureUniqueAccount = async ({ email, username, phone }) => {
   const existing = await prisma.user.findFirst({
     where: {
       OR: [
         { email: { equals: email, mode: "insensitive" } },
         { username: { equals: username, mode: "insensitive" } },
+        ...(phone ? [{ phone }] : []),
       ],
     },
-    select: { email: true, username: true },
+    select: { email: true, username: true, phone: true },
   });
   if (existing?.email?.toLowerCase() === email.toLowerCase()) throw new Error("Email is already registered");
   if (existing?.username?.toLowerCase() === username.toLowerCase()) throw new Error("Username is already in use");
+  if (phone && existing?.phone === phone) throw new Error("Phone number is already in use");
 };
 
 export const getManagedUsers = async (req, res) => {
@@ -89,7 +92,8 @@ export const createManagedAccount = async (req, res) => {
     const data = (isVendor ? managedVendorSchema : managedUserSchema).parse(req.body);
     const email = data.email.trim().toLowerCase();
     const username = data.username.trim();
-    await ensureUniqueAccount({ email, username });
+    const phone = normalizePhone(data.phone);
+    await ensureUniqueAccount({ email, username, phone });
 
     if (isVendor) {
       const slugExists = await prisma.vendor.findUnique({ where: { shopSlug: data.shopSlug }, select: { id: true } });
@@ -103,7 +107,7 @@ export const createManagedAccount = async (req, res) => {
       const user = await tx.user.create({
         data: {
           name: data.name.trim(), username, email,
-          phone: data.phone?.trim() || null,
+          phone,
           password,
           role: isVendor ? "CUSTOMER" : forcedRole,
           status: "ACTIVE",
@@ -140,7 +144,9 @@ export const createManagedAccount = async (req, res) => {
     });
   } catch (error) {
     if (uploadedLogo?.public_id) await deleteFromCloudinary(uploadedLogo.public_id).catch(() => null);
-    const message = error?.code === "P2002"
+    const message = isPhoneUniqueError(error)
+      ? "Phone number is already in use"
+      : error?.code === "P2002"
       ? "Email, username, or shop slug is already in use"
       : error?.issues?.[0]?.message || error.message || "Unable to create account";
     return res.status(400).json({ success: false, message });

@@ -18,6 +18,7 @@ import {
   resetPasswordSchema,
   updatePasswordSchema,
 } from "../validations/auth.validation.js";
+import { isPhoneUniqueError, normalizePhone } from "../utils/phone.js";
 
 export const register = async (req, res) => {
   try {
@@ -42,6 +43,7 @@ export const register = async (req, res) => {
         name: data.name,
         username: data.username,
         email: data.email,
+        phone: normalizePhone(data.phone),
         password: hashedPassword,
         role: "CUSTOMER",
         isEmailVerified: false,
@@ -69,6 +71,9 @@ export const register = async (req, res) => {
       user,
     });
   } catch (error) {
+    if (isPhoneUniqueError(error)) {
+      return res.status(409).json({ success: false, message: "Phone number is already in use" });
+    }
     return res.status(400).json({
       success: false,
       message: error.message,
@@ -526,7 +531,7 @@ export const updateMyProfile = async (req, res) => {
       where: { id: req.user.id },
       data: {
         name,
-        phone,
+        phone: normalizePhone(phone),
         avatar,
       },
       select: {
@@ -547,6 +552,9 @@ export const updateMyProfile = async (req, res) => {
       user,
     });
   } catch (error) {
+    if (isPhoneUniqueError(error)) {
+      return res.status(409).json({ success: false, message: "Phone number is already in use" });
+    }
     res.status(400).json({
       success: false,
       message: error.message,

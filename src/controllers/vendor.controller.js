@@ -6,6 +6,7 @@ import uploadToCloudinary from "../utils/uploadToCloudinary.js";
 import deleteFromCloudinary from "../utils/deleteFromCloudinary.js";
 import sendVendorContactChangeEmail from "../utils/sendVendorContactChangeEmail.js";
 import { scheduleVendorContactChangeCleanup } from "../services/vendorContactCleanup.service.js";
+import { isPhoneUniqueError, normalizePhone } from "../utils/phone.js";
 
 export const registerVendor = async (req, res) => {
   let uploadedLogo = null;
@@ -656,7 +657,7 @@ export const requestVendorContactChange = async (req, res) => {
     if (!user.isEmailVerified) return res.status(400).json({ success: false, message: "Your current email must be verified" });
 
     const requestedEmail = req.body?.email == null ? user.email : String(req.body.email).trim().toLowerCase();
-    const requestedPhone = req.body?.phone == null ? (user.phone || "") : String(req.body.phone).trim();
+    const requestedPhone = req.body?.phone == null ? user.phone : normalizePhone(req.body.phone);
     const pendingEmail = requestedEmail !== user.email ? requestedEmail : null;
     const pendingPhone = requestedPhone !== (user.phone || "") ? requestedPhone : null;
     if (!pendingEmail && !pendingPhone) return res.status(400).json({ success: false, message: "No email or phone change detected" });
@@ -665,6 +666,10 @@ export const requestVendorContactChange = async (req, res) => {
     if (pendingEmail) {
       const existing = await prisma.user.findFirst({ where: { email: pendingEmail, NOT: { id: user.id } }, select: { id: true } });
       if (existing) return res.status(409).json({ success: false, message: "Email is already in use" });
+    }
+    if (pendingPhone) {
+      const existing = await prisma.user.findUnique({ where: { phone: pendingPhone }, select: { id: true } });
+      if (existing && existing.id !== user.id) return res.status(409).json({ success: false, message: "Phone number is already in use" });
     }
     if (user.vendor.contactChangeLastSentAt && Date.now() - user.vendor.contactChangeLastSentAt.getTime() < CONTACT_CODE_RESEND_MS) {
       return res.status(429).json({ success: false, message: "Please wait before requesting another code" });
@@ -718,6 +723,10 @@ export const verifyVendorContactChange = async (req, res) => {
       const existing = await prisma.user.findFirst({ where: { email: vendor.pendingEmail, NOT: { id: req.user.id } }, select: { id: true } });
       if (existing) return res.status(409).json({ success: false, message: "Email is already in use" });
     }
+    if (vendor.pendingPhone) {
+      const existing = await prisma.user.findUnique({ where: { phone: vendor.pendingPhone }, select: { id: true } });
+      if (existing && existing.id !== req.user.id) return res.status(409).json({ success: false, message: "Phone number is already in use" });
+    }
     const updated = await prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: req.user.id }, data: {
         ...(vendor.pendingEmail ? { email: vendor.pendingEmail } : {}),
@@ -730,6 +739,9 @@ export const verifyVendorContactChange = async (req, res) => {
     });
     return res.json({ success: true, message: "Vendor contact information updated successfully", vendor: updated });
   } catch (error) {
+    if (isPhoneUniqueError(error)) {
+      return res.status(409).json({ success: false, message: "Phone number is already in use" });
+    }
     if (process.env.NODE_ENV !== "production") console.error("Vendor contact verification failed:", error?.message);
     return res.status(500).json({ success: false, message: "Unable to verify contact change" });
   }
