@@ -242,6 +242,7 @@ export const getProducts = async (req, res) => {
 
     const where = {
       status: "APPROVED",
+      archivedAt: null,
     };
 
     if (featured === "true") {
@@ -1037,31 +1038,51 @@ export const getMyVendorProducts = async (req, res) => {
     }
 
     const products = await prisma.product.findMany({
-      where: { vendorId: vendor.id },
+      where: {
+        vendorId: vendor.id,
+        archivedAt: null,
+      },
       include: {
         category: true,
         brand: true,
         images: true,
         variants: true,
         orderItems: {
-          where: {
+          select: {
+            orderId: true,
+            quantity: true,
+            itemStatus: true,
             order: {
-              orderStatus: { in: ["DELIVERED", "COMPLETED"] },
+              select: { orderStatus: true },
             },
           },
-          select: { quantity: true },
         },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    const productsWithSaleCount = products.map(({ orderItems, ...product }) => ({
-      ...product,
-      saleCount: orderItems.reduce(
-        (total, item) => total + Number(item.quantity || 0),
-        0
-      ),
-    }));
+    const productsWithSaleCount = products.map(({ orderItems, ...product }) => {
+      const completedItems = orderItems.filter((item) =>
+        ["DELIVERED", "COMPLETED"].includes(item.order?.orderStatus)
+      );
+      const activeItems = orderItems.filter(
+        (item) =>
+          !["COMPLETED", "CANCELLED"].includes(item.itemStatus) &&
+          !["COMPLETED", "CANCELLED", "RETURNED", "REFUNDED"].includes(
+            item.order?.orderStatus
+          )
+      );
+
+      return {
+        ...product,
+        saleCount: completedItems.reduce(
+          (total, item) => total + Number(item.quantity || 0),
+          0
+        ),
+        orderCount: new Set(orderItems.map((item) => item.orderId)).size,
+        activeOrderCount: new Set(activeItems.map((item) => item.orderId)).size,
+      };
+    });
 
     res.json({
       success: true,
@@ -1085,7 +1106,7 @@ export const deleteProduct = async (req, res) => {
       include: { vendor: true },
     });
 
-    if (!product) {
+    if (!product || product.archivedAt) {
       return res.status(404).json({
         success: false,
         message: "Product not found",
@@ -1099,18 +1120,66 @@ export const deleteProduct = async (req, res) => {
       });
     }
 
-    await prisma.product.delete({
-      where: { id },
+    const activeOrderItem = await prisma.orderItem.findFirst({
+      where: {
+        productId: id,
+        itemStatus: {
+          notIn: ["COMPLETED", "CANCELLED"],
+        },
+        order: {
+          orderStatus: {
+            notIn: [
+              "COMPLETED",
+              "CANCELLED",
+              "RETURNED",
+              "REFUNDED",
+            ],
+          },
+        },
+      },
+      select: {
+        id: true,
+      },
     });
 
-    res.json({
+    if (activeOrderItem) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This product has an active order and cannot be deleted yet.",
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.cartItem.deleteMany({
+        where: { productId: id },
+      });
+
+      await tx.wishlist.deleteMany({
+        where: { productId: id },
+      });
+
+      await tx.product.update({
+        where: { id },
+        data: {
+          archivedAt: new Date(),
+          status: "DRAFT",
+          isFeatured: false,
+          salePrice: null,
+          flashSaleStart: null,
+          flashSaleEnd: null,
+        },
+      });
+    });
+
+    return res.json({
       success: true,
       message: "Product deleted successfully",
     });
   } catch (error) {
-    res.status(400).json({
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Unable to delete product",
     });
   }
 };
@@ -1377,6 +1446,8 @@ export const getAdminProducts = async (req, res) => {
     }
 
     const where = {
+      archivedAt: null,
+
       ...(search
         ? {
             name: {
