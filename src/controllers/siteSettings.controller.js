@@ -5,6 +5,9 @@ import { siteSettingsSchema } from "../validations/siteSettings.validation.js";
 
 const fallback = {
   fullLogoUrl: "/friendbazar-logo.png",
+  headerLogoUrl: "/friendbazar-logo.png",
+  footerLogoUrl: "/friendbazar-logo.png",
+  dashboardLogoUrl: "/friendbazar-logo.png",
   compactLogoUrl: "/friendbazar-logo.png",
   faviconUrl: "/friendbazar-logo.png",
   phone: "Customer support",
@@ -12,11 +15,36 @@ const fallback = {
   location: "Bangladesh",
 };
 const publicSelect = Object.fromEntries(Object.keys(fallback).map((key) => [key, true]));
-const adminSelect = { ...publicSelect, fullLogoPublicId: true, compactLogoPublicId: true, faviconPublicId: true };
+const adminSelect = {
+  ...publicSelect,
+  fullLogoPublicId: true,
+  headerLogoPublicId: true,
+  footerLogoPublicId: true,
+  dashboardLogoPublicId: true,
+  compactLogoPublicId: true,
+  faviconPublicId: true,
+};
 
-const withFallback = (settings) => Object.fromEntries(
-  Object.entries(fallback).map(([key, value]) => [key, settings?.[key] || value])
-);
+const withFallback = (settings) => {
+  const resolved = Object.fromEntries(
+    Object.entries(fallback).map(([key, value]) => [
+      key,
+      settings?.[key] || value,
+    ])
+  );
+
+  const legacyFullLogo =
+    settings?.fullLogoUrl || fallback.fullLogoUrl;
+
+  resolved.headerLogoUrl =
+    settings?.headerLogoUrl || legacyFullLogo;
+  resolved.footerLogoUrl =
+    settings?.footerLogoUrl || legacyFullLogo;
+  resolved.dashboardLogoUrl =
+    settings?.dashboardLogoUrl || legacyFullLogo;
+
+  return resolved;
+};
 const isRealImage = (file) => {
   const bytes = file?.buffer;
   if (!bytes || bytes.length < 12) return false;
@@ -50,6 +78,9 @@ export const updateSiteSettings = async (req, res) => {
     const data = siteSettingsSchema.parse(req.body);
     const files = {
       fullLogo: req.files?.fullLogo?.[0],
+      headerLogo: req.files?.headerLogo?.[0],
+      footerLogo: req.files?.footerLogo?.[0],
+      dashboardLogo: req.files?.dashboardLogo?.[0],
       compactLogo: req.files?.compactLogo?.[0],
       favicon: req.files?.favicon?.[0],
     };

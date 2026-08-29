@@ -53,7 +53,7 @@ export const uploadHeroImage = (req, res, next) => {
 };
 const siteBrandingUpload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024, files: 3 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 6 },
   fileFilter: (_req, file, callback) => {
     if (!heroImageMimeTypes.has(file.mimetype)) {
       return callback(new multer.MulterError("LIMIT_UNEXPECTED_FILE", file.fieldname));
@@ -65,6 +65,9 @@ const siteBrandingUpload = multer({
 export const uploadSiteBranding = (req, res, next) => {
   siteBrandingUpload.fields([
     { name: "fullLogo", maxCount: 1 },
+    { name: "headerLogo", maxCount: 1 },
+    { name: "footerLogo", maxCount: 1 },
+    { name: "dashboardLogo", maxCount: 1 },
     { name: "compactLogo", maxCount: 1 },
     { name: "favicon", maxCount: 1 },
   ])(req, res, (error) => {

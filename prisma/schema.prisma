@@ -559,6 +559,12 @@ model PlatformSetting {
   heroIntervalMs         Int            @default(5000)
   fullLogoUrl            String?
   fullLogoPublicId       String?
+  headerLogoUrl          String?
+  headerLogoPublicId     String?
+  footerLogoUrl          String?
+  footerLogoPublicId     String?
+  dashboardLogoUrl       String?
+  dashboardLogoPublicId  String?
   compactLogoUrl         String?
   compactLogoPublicId    String?
   faviconUrl             String?

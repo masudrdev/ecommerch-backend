@@ -171,7 +171,13 @@ export const createOrder = async (req, res) => {
       district,
       upazila,
       deliverySelections,
+      customerNote: rawCustomerNote,
     } = req.body;
+
+    const customerNote =
+      typeof rawCustomerNote === "string"
+        ? rawCustomerNote.trim()
+        : "";
 
     const orderUserId =
       req.user.role === "CUSTOMER"
@@ -210,6 +216,13 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "District is required",
+      });
+    }
+
+    if (customerNote.length > 500) {
+      return res.status(400).json({
+        success: false,
+        message: "Order note cannot exceed 500 characters",
       });
     }
 
@@ -541,6 +554,18 @@ export const createOrder = async (req, res) => {
               },
             });
 
+          if (customerNote) {
+            await tx.orderNote.create({
+              data: {
+                orderId: newOrder.id,
+                userId: orderUserId,
+                note: customerNote,
+                noteType: "CUSTOMER_NOTE",
+                visibleToCustomer: true,
+              },
+            });
+          }
+
           await tx.cartItem.deleteMany({
             where: {
               cartId: cart.id,
@@ -711,6 +736,21 @@ export const getOrderDetails = async (req, res) => {
                 shopSlug: true,
               },
             },
+          },
+        },
+
+        notes: {
+          where: {
+            noteType: "CUSTOMER_NOTE",
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+          select: {
+            id: true,
+            note: true,
+            noteType: true,
+            createdAt: true,
           },
         },
 

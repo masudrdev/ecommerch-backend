@@ -22,16 +22,49 @@ import { isPhoneUniqueError, normalizePhone } from "../utils/phone.js";
 
 export const register = async (req, res) => {
   try {
-    const data = registerSchema.parse(req.body);
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const errors = {};
+      for (const issue of parsed.error.issues) {
+        const field = issue.path[0];
+        if (!field || errors[field]) continue;
+        errors[field] =
+          field === "username" && issue.code === "invalid_format"
+            ? "Username can contain only letters, numbers and underscore."
+            : field === "email"
+              ? "Please enter a valid email address."
+              : field === "phone"
+                ? "Please enter a valid phone number."
+                : issue.message;
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors,
+      });
+    }
 
+    const data = parsed.data;
     const existingUser = await prisma.user.findUnique({
       where: { email: data.email },
     });
 
     if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "This email is already registered.",
+        errors: { email: "This email is already registered." },
+      });
+    }
+
+    let phone;
+    try {
+      phone = normalizePhone(data.phone);
+    } catch {
       return res.status(400).json({
         success: false,
-        message: "Email already registered",
+        message: "Validation failed",
+        errors: { phone: "Please enter a valid phone number." },
       });
     }
 
@@ -43,7 +76,7 @@ export const register = async (req, res) => {
         name: data.name,
         username: data.username,
         email: data.email,
-        phone: normalizePhone(data.phone),
+        phone,
         password: hashedPassword,
         role: "CUSTOMER",
         isEmailVerified: false,
@@ -72,11 +105,34 @@ export const register = async (req, res) => {
     });
   } catch (error) {
     if (isPhoneUniqueError(error)) {
-      return res.status(409).json({ success: false, message: "Phone number is already in use" });
+      return res.status(409).json({
+        success: false,
+        message: "This phone number is already registered.",
+        errors: { phone: "This phone number is already registered." },
+      });
     }
-    return res.status(400).json({
+    if (error?.code === "P2002") {
+      const target = Array.isArray(error?.meta?.target)
+        ? error.meta.target.join(" ").toLowerCase()
+        : String(error?.meta?.target || "").toLowerCase();
+      if (target.includes("username")) {
+        return res.status(409).json({
+          success: false,
+          message: "This username is already taken.",
+          errors: { username: "This username is already taken." },
+        });
+      }
+      if (target.includes("email")) {
+        return res.status(409).json({
+          success: false,
+          message: "This email is already registered.",
+          errors: { email: "This email is already registered." },
+        });
+      }
+    }
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Something went wrong. Please try again.",
     });
   }
 };
@@ -188,6 +244,8 @@ export const login = async (req, res) => {
       return res.status(403).json({
         success: false,
         message: "Please verify your email before login",
+        requiresEmailVerification: true,
+        email: user.email,
       });
     }
 
