@@ -423,19 +423,31 @@ model Wishlist {
 }
 
 model Review {
-  id              String    @id @default(uuid())
+  id              String        @id @default(uuid())
   userId          String?
   productId       String
   rating          Int
   comment         String?
-  createdAt       DateTime  @default(now())
+  createdAt       DateTime      @default(now())
   vendorRepliedAt DateTime?
   vendorReply     String?
   reviewerAvatar  String?
   reviewerName    String?
-  source          String    @default("USER")
-  product         Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  user            User?     @relation(fields: [userId], references: [id])
+  source          String        @default("USER")
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user            User?         @relation(fields: [userId], references: [id])
+  images          ReviewImage[]
+}
+
+model ReviewImage {
+  id        String   @id @default(uuid())
+  reviewId  String
+  url       String
+  publicId  String
+  createdAt DateTime @default(now())
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
 }
 
 model Notification {

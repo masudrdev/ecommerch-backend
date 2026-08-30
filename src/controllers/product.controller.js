@@ -540,7 +540,17 @@ export const getProductBySlug = async (req, res) => {
         },
         images: true,
         variants: true,
-        reviews: true,
+        reviews: {
+          include: {
+            images: { orderBy: { createdAt: "asc" } },
+            user: {
+              select: {
+                name: true,
+                username: true,
+              },
+            },
+          },
+        },
       },
     });
 

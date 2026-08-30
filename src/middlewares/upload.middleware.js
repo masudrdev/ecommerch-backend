@@ -99,3 +99,27 @@ export const uploadStaffAvatar = (req, res, next) => {
     return res.status(400).json({ success: false, message });
   });
 };
+const reviewImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+const reviewImageUpload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024, files: 3 },
+  fileFilter: (_req, file, callback) => {
+    if (!reviewImageMimeTypes.has(file.mimetype)) {
+      const error = new Error("Invalid review image type");
+      error.code = "INVALID_REVIEW_IMAGE_TYPE";
+      return callback(error);
+    }
+    callback(null, true);
+  },
+});
+
+export const uploadReviewImages = (req, res, next) => {
+  reviewImageUpload.array("images", 3)(req, res, (error) => {
+    if (!error) return next();
+    let message = "Please upload JPG, PNG, or WebP images only";
+    if (error.code === "LIMIT_FILE_SIZE") message = "Each review image must be 10 MB or smaller";
+    else if (error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_UNEXPECTED_FILE") message = "You can upload up to 3 images per review.";
+    return res.status(400).json({ success: false, message });
+  });
+};

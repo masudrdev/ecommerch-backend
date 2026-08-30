@@ -2,6 +2,14 @@ import prisma from "../lib/prisma.js";
 import createActivityLog from "../utils/createActivityLog.js";
 import createNotification from "../utils/createNotification.js";
 import { calculateDeliveryCharge, DELIVERY_TYPES } from "../utils/deliveryCharge.js";
+
+const createCustomerNotificationSafely = async (payload) => {
+  try {
+    await createNotification(payload);
+  } catch (error) {
+    console.error("Customer order notification failed:", error);
+  }
+};
 const generateOrderNumber = () => {
   return "FB-" + Date.now();
 };
@@ -1648,12 +1656,12 @@ const order = await prisma.$transaction(async (tx) => {
       } else if (isPaymentStatusChanged) {
         action = "PAYMENT_STATUS_UPDATED";
       }
-      await createNotification({
+      await createCustomerNotificationSafely({
         userId: order.userId,
         title: notificationTitle,
         message: notificationMessage,
         type: action,
-        link: `/customer/orders/${order.id}`,
+        link: "/dashboard/orders/" + order.id,
       });
 
       await createActivityLog({
@@ -2685,6 +2693,25 @@ export const updateVendorOrderStatus = async (req, res) => {
       req,
     });
 
+    if (order.orderStatus !== updatedOrder.orderStatus) {
+      const statusLabel = updatedOrder.orderStatus
+        .toLowerCase()
+        .replaceAll("_", " ");
+
+      await createCustomerNotificationSafely({
+        userId: order.userId,
+        title: "Order " + statusLabel,
+        message:
+          "Your order " +
+          updatedOrder.orderNumber +
+          " is now " +
+          statusLabel +
+          ".",
+        type: "ORDER_STATUS_UPDATED",
+        link: "/dashboard/orders/" + updatedOrder.id,
+      });
+    }
+
     return res.json({
       success: true,
       message: "Vendor order status updated successfully",
@@ -2889,6 +2916,13 @@ export const updateVendorOrderItemStatus = async (
 
               include: {
                 product: true,
+                order: {
+                  select: {
+                    id: true,
+                    userId: true,
+                    orderNumber: true,
+                  },
+                },
               },
             });
 
@@ -3316,6 +3350,28 @@ export const updateVendorOrderItemStatus = async (
 
       req,
     });
+
+    if (
+      result.oldItem.itemStatus !== result.newItem.itemStatus
+    ) {
+      const statusLabel = result.newItem.itemStatus
+        .toLowerCase()
+        .replaceAll("_", " ");
+
+      await createCustomerNotificationSafely({
+        userId: result.oldItem.order.userId,
+        title: "Order item " + statusLabel,
+        message:
+          result.oldItem.product.name +
+          " in order " +
+          result.oldItem.order.orderNumber +
+          " is now " +
+          statusLabel +
+          ".",
+        type: "ORDER_ITEM_STATUS_UPDATED",
+        link: "/dashboard/orders/" + result.oldItem.order.id,
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -3867,6 +3923,13 @@ export const updateOrderItemStatusByAdmin = async (
 
               include: {
                 product: true,
+                order: {
+                  select: {
+                    id: true,
+                    userId: true,
+                    orderNumber: true,
+                  },
+                },
               },
             });
 
@@ -4292,6 +4355,9 @@ if (
 
             oldDeliveryCharge:
               existingItem.deliveryCharge,
+
+            customerOrder:
+              existingItem.order,
           };
         },
         {
@@ -4352,6 +4418,28 @@ if (
 
       req,
     });
+
+    if (
+      result.oldStatus !== result.updatedItem.itemStatus
+    ) {
+      const statusLabel = result.updatedItem.itemStatus
+        .toLowerCase()
+        .replaceAll("_", " ");
+
+      await createCustomerNotificationSafely({
+        userId: result.customerOrder.userId,
+        title: "Order item " + statusLabel,
+        message:
+          result.updatedItem.product.name +
+          " in order " +
+          result.customerOrder.orderNumber +
+          " is now " +
+          statusLabel +
+          ".",
+        type: "ORDER_ITEM_STATUS_UPDATED",
+        link: "/dashboard/orders/" + result.customerOrder.id,
+      });
+    }
 
     return res.status(200).json({
       success: true,

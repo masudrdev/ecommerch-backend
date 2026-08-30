@@ -277,6 +277,7 @@ export const login = async (req, res) => {
         name: user.name,
         username: user.username,
         email: user.email,
+        avatar: user.avatar,
         role: user.role,
       },
     });
@@ -521,6 +522,7 @@ export const refreshToken = async (req, res) => {
         name: user.name,
         username: user.username,
         email: user.email,
+        avatar: user.avatar,
         role: user.role,
       },
     });

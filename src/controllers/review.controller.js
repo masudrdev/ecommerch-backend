@@ -1,4 +1,13 @@
 import prisma from "../lib/prisma.js";
+import uploadToCloudinary from "../utils/uploadToCloudinary.js";
+import deleteFromCloudinary from "../utils/deleteFromCloudinary.js";
+
+const MAX_REVIEW_IMAGES = 3;
+const REVIEW_IMAGE_UPLOAD_OPTIONS = { transformation: [{ width: 1600, height: 1600, crop: "limit" }, { quality: "auto:good", fetch_format: "auto" }] };
+const cleanupCloudinaryImages = async (images = []) => { await Promise.allSettled(images.filter((image) => image?.publicId).map((image) => deleteFromCloudinary(image.publicId))); };
+const uploadReviewImageFiles = async (files = []) => { const uploaded=[]; try { for (const file of files) { const result=await uploadToCloudinary(file.buffer, "friendbazar/reviews", REVIEW_IMAGE_UPLOAD_OPTIONS); uploaded.push({url:result.secure_url,publicId:result.public_id}); } return uploaded; } catch (_error) { await cleanupCloudinaryImages(uploaded); throw new Error("Unable to upload review images. Please try again."); } };
+const parseKeptImageIds = (value, existingImages) => { if (value === undefined) return existingImages.map((image) => image.id); try { const parsed=JSON.parse(value || "[]"); if (!Array.isArray(parsed)) return null; const existingIds=new Set(existingImages.map((image)=>image.id)); if (parsed.some((id)=>typeof id !== "string" || !existingIds.has(id))) return null; return [...new Set(parsed)]; } catch (_error) { return null; } };
+const getSafeMutationMessage = (error, fallback) => String(error?.message || "").startsWith("Unable to ") ? error.message : fallback;
 
 const isAdminRole = (role) => {
   return ["ADMIN", "SUPER_ADMIN"].includes(role);
@@ -81,13 +90,17 @@ export const createReview = async (req, res) => {
       });
     }
 
-    const review = await prisma.review.create({
+    const uploadedImages = await uploadReviewImageFiles(req.files || []);
+    let review;
+    try {
+      review = await prisma.review.create({
       data: {
         userId: req.user.id,
         productId,
         rating: finalRating,
         comment: comment || "",
         source: "USER",
+        images: uploadedImages.length ? { create: uploadedImages } : undefined,
       },
       include: {
         user: {
@@ -106,8 +119,13 @@ export const createReview = async (req, res) => {
             images: true,
           },
         },
+        images: true,
       },
-    });
+      });
+    } catch (_error) {
+      await cleanupCloudinaryImages(uploadedImages);
+      throw new Error("Unable to submit review. Please try again.");
+    }
 
     res.status(201).json({
       success: true,
@@ -117,7 +135,7 @@ export const createReview = async (req, res) => {
   } catch (error) {
     res.status(400).json({
       success: false,
-      message: error.message,
+      message: getSafeMutationMessage(error, "Unable to submit review"),
     });
   }
 };
@@ -154,7 +172,10 @@ const product = await prisma.product.findUnique({
       });
     }
 
-    const review = await prisma.review.create({
+    const uploadedImages = await uploadReviewImageFiles(req.files || []);
+    let review;
+    try {
+      review = await prisma.review.create({
       data: {
         productId,
         userId: null,
@@ -163,6 +184,7 @@ const product = await prisma.product.findUnique({
         rating: finalRating,
         comment: comment?.trim() || "",
         source: "ADMIN",
+        images: uploadedImages.length ? { create: uploadedImages } : undefined,
       },
       include: {
         user: {
@@ -181,8 +203,13 @@ const product = await prisma.product.findUnique({
             images: true,
           },
         },
+        images: true,
       },
-    });
+      });
+    } catch (_error) {
+      await cleanupCloudinaryImages(uploadedImages);
+      throw new Error("Unable to create review. Please try again.");
+    }
     if (product.vendor?.userId) {
   await prisma.notification.create({
     data: {
@@ -203,7 +230,7 @@ const product = await prisma.product.findUnique({
   } catch (error) {
     res.status(400).json({
       success: false,
-      message: error.message,
+      message: getSafeMutationMessage(error, "Unable to create review"),
     });
   }
 };
@@ -394,6 +421,7 @@ export const getProductReviews = async (req, res) => {
             avatar: true,
           },
         },
+        images: { orderBy: { createdAt: "asc" } },
       },
       orderBy: {
         createdAt: "desc",
@@ -435,32 +463,57 @@ export const getProductReviews = async (req, res) => {
 export const getMyReviews = async (req, res) => {
   try {
     const reviews = await prisma.review.findMany({
-      where: {
-        userId: req.user.id,
-      },
+      where: { userId: req.user.id },
       include: {
+        product: {
+          select: { id: true, name: true, slug: true, images: true },
+        },
+        images: { orderBy: { createdAt: "asc" } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const reviewedProductIds = reviews.map((review) => review.productId);
+    const eligibleOrderItems = await prisma.orderItem.findMany({
+      where: {
+        order: {
+          userId: req.user.id,
+          orderStatus: { in: ["DELIVERED", "COMPLETED"] },
+        },
+        ...(reviewedProductIds.length ? { productId: { notIn: reviewedProductIds } } : {}),
+        product: { status: "APPROVED" },
+      },
+      select: {
+        productId: true,
+        order: { select: { id: true, orderNumber: true, orderStatus: true } },
         product: {
           select: {
             id: true,
             name: true,
             slug: true,
-            images: true,
+            images: {
+              where: { isMain: true },
+              select: { url: true },
+              take: 1,
+            },
           },
         },
       },
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { order: { createdAt: "desc" } },
     });
 
-    res.json({
-      success: true,
-      reviews,
+    const seenProductIds = new Set();
+    const eligibleReviews = eligibleOrderItems.filter((item) => {
+      if (seenProductIds.has(item.productId)) return false;
+      seenProductIds.add(item.productId);
+      return true;
     });
-  } catch (error) {
-    res.status(500).json({
+
+    return res.json({ success: true, reviews, eligibleReviews });
+  } catch (_error) {
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: "Unable to load reviews",
     });
   }
 };
@@ -828,62 +881,31 @@ export const replyVendorReview = async (req, res) => {
 export const updateReview = async (req, res) => {
   try {
     const { id } = req.params;
-    const { rating, comment } = req.body;
-
-    const review = await prisma.review.findUnique({
-      where: {
-        id,
-      },
-    });
-
-    if (!review || review.userId !== req.user.id) {
-      return res.status(404).json({
-        success: false,
-        message: "Review not found",
-      });
-    }
-
+    const { rating, comment, keepImageIds } = req.body;
+    const review = await prisma.review.findUnique({ where: { id }, include: { images: true } });
+    if (!review || review.userId !== req.user.id) return res.status(404).json({ success: false, message: "Review not found" });
     const finalRating = rating ? normalizeRating(rating) : review.rating;
-
-    if (!finalRating) {
-      return res.status(400).json({
-        success: false,
-        message: "Rating must be between 1 and 5",
-      });
-    }
-
-    const updated = await prisma.review.update({
-      where: {
-        id,
-      },
-      data: {
-        rating: finalRating,
-        comment,
-      },
-    });
-
-    res.json({
-      success: true,
-      message: "Review updated successfully",
-      review: updated,
-    });
-  } catch (error) {
-    res.status(400).json({
-      success: false,
-      message: error.message,
-    });
-  }
+    if (!finalRating) return res.status(400).json({ success: false, message: "Rating must be between 1 and 5" });
+    const keptIds = parseKeptImageIds(keepImageIds, review.images);
+    if (!keptIds) return res.status(400).json({ success: false, message: "Invalid review image selection" });
+    const newFiles = req.files || [];
+    if (keptIds.length + newFiles.length > MAX_REVIEW_IMAGES) return res.status(400).json({ success: false, message: "You can upload up to 3 images per review." });
+    const removedImages = review.images.filter((image) => !keptIds.includes(image.id));
+    const uploadedImages = await uploadReviewImageFiles(newFiles);
+    let updated;
+    try {
+      updated = await prisma.review.update({ where: { id }, data: { rating: finalRating, comment, images: { deleteMany: removedImages.map((image) => ({ id: image.id })), create: uploadedImages } }, include: { images: true } });
+    } catch (_error) { await cleanupCloudinaryImages(uploadedImages); throw new Error("Unable to update review. Please try again."); }
+    await cleanupCloudinaryImages(removedImages);
+    return res.json({ success: true, message: "Review updated successfully", review: updated });
+  } catch (error) { return res.status(400).json({ success: false, message: getSafeMutationMessage(error, "Unable to update review") }); }
 };
 
 export const deleteReview = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const review = await prisma.review.findUnique({
-      where: {
-        id,
-      },
-    });
+    const review = await prisma.review.findUnique({ where: { id }, include: { images: true } });
 
     if (!review) {
       return res.status(404).json({
@@ -902,11 +924,8 @@ export const deleteReview = async (req, res) => {
       });
     }
 
-    await prisma.review.delete({
-      where: {
-        id,
-      },
-    });
+    await prisma.review.delete({ where: { id } });
+    await cleanupCloudinaryImages(review.images);
 
     res.json({
       success: true,
@@ -915,7 +934,7 @@ export const deleteReview = async (req, res) => {
   } catch (error) {
     res.status(400).json({
       success: false,
-      message: error.message,
+      message: "Unable to delete review",
     });
   }
 };

@@ -12,10 +12,11 @@ import {
   deleteReview,
 } from "../controllers/review.controller.js";
 import { protect, allowRoles } from "../middlewares/auth.middleware.js";
+import { uploadReviewImages } from "../middlewares/upload.middleware.js";
 
 const router = express.Router();
 
-router.post("/", protect, allowRoles("CUSTOMER"), createReview);
+router.post("/", protect, allowRoles("CUSTOMER"), uploadReviewImages, createReview);
 
 router.get("/my-reviews", protect, allowRoles("CUSTOMER"), getMyReviews);
 
@@ -30,6 +31,7 @@ router.post(
   "/admin/custom",
   protect,
   allowRoles("ADMIN", "SUPER_ADMIN"),
+  uploadReviewImages,
   createAdminCustomReview
 );
 
@@ -51,7 +53,7 @@ router.get(
 
 router.get("/product/:productId", getProductReviews);
 
-router.patch("/:id", protect, allowRoles("CUSTOMER"), updateReview);
+router.patch("/:id", protect, allowRoles("CUSTOMER"), uploadReviewImages, updateReview);
 
 router.delete(
   "/:id",
