@@ -10,6 +10,8 @@ const fallback = {
   dashboardLogoUrl: "/friendbazar-logo.png",
   compactLogoUrl: "/friendbazar-logo.png",
   faviconUrl: "/friendbazar-logo.png",
+  metaTrackingEnabled: false,
+  metaPixelId: "",
   phone: "Customer support",
   supportEmail: "support@friendbazar.com",
   location: "Bangladesh",
@@ -23,7 +25,22 @@ const adminSelect = {
   dashboardLogoPublicId: true,
   compactLogoPublicId: true,
   faviconPublicId: true,
+  metaTestEventCode: true,
 };
+
+const internalAdminSelect = {
+  ...adminSelect,
+  metaCapiAccessToken: true,
+};
+
+function toAdminResponse(settings) {
+  const { metaCapiAccessToken, ...safeSettings } = settings || {};
+  return {
+    ...safeSettings,
+    metaCapiConfigured: Boolean(metaCapiAccessToken),
+    ...withFallback(settings),
+  };
+}
 
 const withFallback = (settings) => {
   const resolved = Object.fromEntries(
@@ -65,8 +82,8 @@ export const getPublicSiteSettings = async (_req, res) => {
 
 export const getAdminSiteSettings = async (_req, res) => {
   try {
-    const settings = await prisma.platformSetting.findUnique({ where: { id: "GLOBAL" }, select: adminSelect });
-    return res.json({ success: true, settings: { ...settings, ...withFallback(settings) } });
+    const settings = await prisma.platformSetting.findUnique({ where: { id: "GLOBAL" }, select: internalAdminSelect });
+    return res.json({ success: true, settings: toAdminResponse(settings) });
   } catch {
     return res.status(500).json({ success: false, message: "Unable to load Site Settings" });
   }
@@ -76,6 +93,7 @@ export const updateSiteSettings = async (req, res) => {
   const uploaded = {};
   try {
     const data = siteSettingsSchema.parse(req.body);
+    if (!data.metaCapiAccessToken) delete data.metaCapiAccessToken;
     const files = {
       fullLogo: req.files?.fullLogo?.[0],
       headerLogo: req.files?.headerLogo?.[0],
@@ -87,7 +105,7 @@ export const updateSiteSettings = async (req, res) => {
     for (const [key, file] of Object.entries(files)) {
       if (file && !isRealImage(file)) return res.status(400).json({ success: false, message: `${key} must be a valid JPG, PNG, or WebP image` });
     }
-    const existing = await prisma.platformSetting.findUnique({ where: { id: "GLOBAL" }, select: adminSelect });
+    const existing = await prisma.platformSetting.findUnique({ where: { id: "GLOBAL" }, select: internalAdminSelect });
     for (const [key, file] of Object.entries(files)) {
       if (file) uploaded[key] = await uploadToCloudinary(file.buffer, "friendbazar/site-branding");
     }
@@ -97,13 +115,13 @@ export const updateSiteSettings = async (req, res) => {
       imageData[`${key}PublicId`] = value.public_id;
     }
     const settings = await prisma.platformSetting.upsert({
-      where: { id: "GLOBAL" }, update: { ...data, ...imageData }, create: { id: "GLOBAL", ...data, ...imageData }, select: adminSelect,
+      where: { id: "GLOBAL" }, update: { ...data, ...imageData }, create: { id: "GLOBAL", ...data, ...imageData }, select: internalAdminSelect,
     });
     for (const key of Object.keys(uploaded)) {
       const oldId = existing?.[`${key}PublicId`];
       if (oldId) await deleteFromCloudinary(oldId).catch(() => null);
     }
-    return res.json({ success: true, message: "Site Settings updated successfully", settings: { ...settings, ...withFallback(settings) } });
+    return res.json({ success: true, message: "Site Settings updated successfully", settings: toAdminResponse(settings) });
   } catch (error) {
     await Promise.all(Object.values(uploaded).map((item) => deleteFromCloudinary(item.public_id).catch(() => null)));
     if (error?.name === "ZodError") return res.status(400).json({ success: false, message: error.issues?.[0]?.message || "Invalid Site Settings" });

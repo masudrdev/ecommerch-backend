@@ -1,6 +1,7 @@
 import prisma from "../lib/prisma.js";
 import createActivityLog from "../utils/createActivityLog.js";
 import createNotification from "../utils/createNotification.js";
+import { sendMetaPurchaseSafely } from "../utils/metaConversionsApi.js";
 import { calculateDeliveryCharge, DELIVERY_TYPES } from "../utils/deliveryCharge.js";
 
 const createCustomerNotificationSafely = async (payload) => {
@@ -10,6 +11,14 @@ const createCustomerNotificationSafely = async (payload) => {
     console.error("Customer order notification failed:", error);
   }
 };
+const createOrderActivityLogSafely = async (payload) => {
+  try {
+    await createActivityLog(payload);
+  } catch (error) {
+    console.error("Customer order activity log failed:", error);
+  }
+};
+
 const generateOrderNumber = () => {
   return "FB-" + Date.now();
 };
@@ -179,8 +188,18 @@ export const createOrder = async (req, res) => {
       district,
       upazila,
       deliverySelections,
+      paymentMethod: rawPaymentMethod = "COD",
+      transactionId: rawTransactionId,
+      senderNumber: rawSenderNumber,
+      submittedAmount: rawSubmittedAmount,
       customerNote: rawCustomerNote,
     } = req.body;
+
+    const selectedPaymentMethod = String(rawPaymentMethod || "COD").toUpperCase();
+    const transactionId = String(rawTransactionId || "").trim().toUpperCase();
+    const senderNumber = String(rawSenderNumber || "").trim();
+    const submittedAmount = Number(rawSubmittedAmount);
+    const walletMethods = ["BKASH", "NAGAD", "ROCKET"];
 
     const customerNote =
       typeof rawCustomerNote === "string"
@@ -469,6 +488,30 @@ export const createOrder = async (req, res) => {
       productTotal +
       totalDeliveryFee;
 
+    if (selectedPaymentMethod !== "COD") {
+      if (!walletMethods.includes(selectedPaymentMethod)) {
+        return res.status(400).json({ success: false, message: "Invalid payment method" });
+      }
+      if (transactionId.length < 4 || transactionId.length > 80) {
+        return res.status(400).json({ success: false, message: "Valid Transaction ID is required" });
+      }
+      if (!/^[+0-9]{6,20}$/.test(senderNumber)) {
+        return res.status(400).json({ success: false, message: "Valid sender number is required" });
+      }
+      if (!Number.isFinite(submittedAmount) || submittedAmount <= 0 || submittedAmount > grandTotal) {
+        return res.status(400).json({ success: false, message: "Paid amount must be within the order total" });
+      }
+      const settings = await prisma.platformSetting.findUnique({ where: { id: "GLOBAL" } });
+      const key = selectedPaymentMethod.toLowerCase();
+      if (settings?.[key + "Enabled"] !== true || !settings?.[key + "Number"]) {
+        return res.status(400).json({ success: false, message: selectedPaymentMethod + " is currently unavailable" });
+      }
+      const duplicate = await prisma.manualPaymentTransaction.findUnique({ where: { transactionId } });
+      if (duplicate) {
+        return res.status(409).json({ success: false, message: "This Transaction ID has already been submitted" });
+      }
+    }
+
     const order =
       await prisma.$transaction(
         async (tx) => {
@@ -507,10 +550,12 @@ export const createOrder = async (req, res) => {
                   grandTotal,
 
                 paymentMethod:
-                  "COD",
+                  selectedPaymentMethod,
 
                 paymentStatus:
-                  "UNPAID",
+                  selectedPaymentMethod === "COD"
+                    ? "UNPAID"
+                    : "PENDING",
 
                 orderStatus:
                   "PENDING",
@@ -562,6 +607,19 @@ export const createOrder = async (req, res) => {
               },
             });
 
+          if (selectedPaymentMethod !== "COD") {
+            await tx.manualPaymentTransaction.create({
+              data: {
+                orderId: newOrder.id,
+                submittedById: orderUserId,
+                paymentMethod: selectedPaymentMethod,
+                transactionId,
+                submittedAmount,
+                senderNumber,
+              },
+            });
+          }
+
           if (customerNote) {
             await tx.orderNote.create({
               data: {
@@ -581,10 +639,14 @@ export const createOrder = async (req, res) => {
           });
 
           return newOrder;
+        },
+        {
+          maxWait: 5000,
+          timeout: 15000,
         }
       );
 
-    await createNotification({
+    await createCustomerNotificationSafely({
       userId: order.userId,
 
       title: "Order Created",
@@ -596,7 +658,17 @@ export const createOrder = async (req, res) => {
       link: `/customer/orders/${order.id}`,
     });
 
-    await createActivityLog({
+    if (selectedPaymentMethod !== "COD") {
+      await createCustomerNotificationSafely({
+        userId: order.userId,
+        title: "Payment Submitted",
+        message: `Your ${selectedPaymentMethod} payment for order ${order.orderNumber} is waiting for verification.`,
+        type: "PAYMENT_SUBMITTED",
+        link: `/dashboard/orders/${order.id}`,
+      });
+    }
+
+    await createOrderActivityLogSafely({
       userId: req.user.id,
 
       action: "ORDER_CREATED",
@@ -649,12 +721,18 @@ export const createOrder = async (req, res) => {
       error
     );
 
+    if (error?.code === "P2002") {
+      return res.status(409).json({
+        success: false,
+        message: "This Transaction ID has already been submitted",
+      });
+    }
+
     return res.status(400).json({
       success: false,
-
-      message:
-        error.message ||
-        "Order creation failed",
+      message: error?.statusCode
+        ? error.message
+        : "Order creation failed",
     });
   }
 };
@@ -667,8 +745,19 @@ export const getMyOrders = async (req, res) => {
       include: {
         items: {
           include: {
-            product: true,
+            product: {
+              include: {
+                images: {
+                  where: { isMain: true },
+                  select: { url: true },
+                  take: 1,
+                },
+              },
+            },
           },
+        },
+        paymentTransactions: {
+          select: { status: true },
         },
       },
       orderBy: {
@@ -1600,6 +1689,13 @@ const order = await prisma.$transaction(async (tx) => {
     },
   });
 });
+
+    if (
+      oldOrder.orderStatus !== "COMPLETED" &&
+      order.orderStatus === "COMPLETED"
+    ) {
+      await sendMetaPurchaseSafely(order.id);
+    }
     const isOrderStatusChanged = oldOrder.orderStatus !== order.orderStatus;
     const isPaymentStatusChanged = oldOrder.paymentStatus !== order.paymentStatus;
     let notificationTitle = "Order Updated";
@@ -1715,6 +1811,20 @@ export const cancelMyOrder = async (req, res) => {
       });
     }
 
+    const activeWalletPayments = await prisma.manualPaymentTransaction.count({
+      where: {
+        orderId: order.id,
+        status: { in: ["PENDING_VERIFICATION", "VERIFIED"] },
+      },
+    });
+
+    if (activeWalletPayments > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "This order cannot be cancelled after a wallet payment has been submitted",
+      });
+    }
+
     const updatedOrder = await prisma.order.update({
       where: { id },
       data: {
@@ -1794,6 +1904,16 @@ export const cancelPendingOrderItemByCustomer = async (req, res) => {
 
         if (String(item.itemStatus).toUpperCase() !== "PENDING") {
           throw new Error("Only pending items can be cancelled");
+        }
+
+        const activeWalletPayments = await tx.manualPaymentTransaction.count({
+          where: {
+            orderId: item.order.id,
+            status: { in: ["PENDING_VERIFICATION", "VERIFIED"] },
+          },
+        });
+        if (activeWalletPayments > 0) {
+          throw new Error("Order items cannot be cancelled after a wallet payment has been submitted");
         }
 
         const updatedItem = await tx.orderItem.update({
@@ -2292,6 +2412,7 @@ export const getVendorOrders = async (req, res) => {
           id: true,
           orderId: true,
           itemStatus: true,
+          returnStatus: true,
 
           quantity: true,
           price: true,
@@ -2442,6 +2563,7 @@ export const getVendorOrders = async (req, res) => {
         orderId: item.orderId,
 
         itemStatus: item.itemStatus,
+        returnStatus: item.returnStatus,
 
         quantity,
         price,
@@ -2783,6 +2905,12 @@ const syncMainOrderStatusFromItems = async (
     (status) => status === "CANCELLED"
   ).length;
 
+  const orderPayment =
+    await prismaClient.order.findUnique({
+      where: { id: orderId },
+      select: { totalAmount: true, paymentMethod: true },
+    });
+
   let newPaymentStatus = "UNPAID";
 
   if (completedItemCount > 0) {
@@ -2792,6 +2920,35 @@ const syncMainOrderStatusFromItems = async (
     newPaymentStatus = allItemsSettled
       ? "PAID"
       : "PARTIALLY_PAID";
+  }
+
+  /* Preserve wallet verification; COD keeps the existing behavior. */
+  if (orderPayment && orderPayment.paymentMethod !== "COD") {
+    const verifiedPayment =
+      await prismaClient.manualPaymentTransaction.aggregate({
+        where: { orderId, status: "VERIFIED" },
+        _sum: { verifiedAmount: true },
+      });
+    const pendingPaymentCount =
+      await prismaClient.manualPaymentTransaction.count({
+        where: { orderId, status: "PENDING_VERIFICATION" },
+      });
+    const verifiedAmount = Number(verifiedPayment._sum.verifiedAmount || 0);
+    const orderTotal = Number(orderPayment.totalAmount || 0);
+    const allItemsSettled =
+      completedItemCount + cancelledItemCount === statuses.length;
+
+    if (completedItemCount > 0 && allItemsSettled) {
+      newPaymentStatus = "PAID";
+    } else if (verifiedAmount >= orderTotal && orderTotal > 0) {
+      newPaymentStatus = "PAID";
+    } else if (verifiedAmount > 0) {
+      newPaymentStatus = "PARTIALLY_PAID";
+    } else if (pendingPaymentCount > 0) {
+      newPaymentStatus = "PENDING";
+    } else {
+      newPaymentStatus = "UNPAID";
+    }
   }
 
   let newOrderStatus = "PENDING";
@@ -3297,6 +3454,10 @@ export const updateVendorOrderItemStatus = async (
           timeout: 30000,
         }
       );
+
+    if (result.updatedOrder?.orderStatus === "COMPLETED") {
+      await sendMetaPurchaseSafely(result.updatedOrder.id);
+    }
 
     await createActivityLog({
       userId:
@@ -4366,6 +4527,10 @@ if (
         }
       );
 
+    if (result.updatedOrder?.orderStatus === "COMPLETED") {
+      await sendMetaPurchaseSafely(result.updatedOrder.id);
+    }
+
     await createActivityLog({
       userId: req.user.id,
 
@@ -4791,17 +4956,20 @@ export const updateOrderItemReturnByVendor = async (req, res) => {
         },
       });
 
-      const updatedOrder = await syncMainOrderStatusFromItems(
-        existingItem.orderId,
-        tx
-      );
+      const updatedOrder =
+        returnStatus === "RESHIPPED"
+          ? await syncMainOrderStatusFromItems(
+              existingItem.orderId,
+              tx
+            )
+          : null;
 
       return {
         updatedItem,
         updatedOrder,
         oldReturnStatus: existingItem.returnStatus,
       };
-    });
+    }, { timeout: 15000 });
 
     await createActivityLog({
       userId: req.user.id,

@@ -8,44 +8,46 @@ datasource db {
 }
 
 model User {
-  id                        String               @id @default(uuid())
+  id                        String                     @id @default(uuid())
   name                      String
-  email                     String               @unique
-  phone                     String?              @unique
+  email                     String                     @unique
+  phone                     String?                    @unique
   password                  String
-  role                      Role                 @default(CUSTOMER)
-  status                    UserStatus           @default(ACTIVE)
-  isEmailVerified           Boolean              @default(false)
+  role                      Role                       @default(CUSTOMER)
+  status                    UserStatus                 @default(ACTIVE)
+  isEmailVerified           Boolean                    @default(false)
   emailVerificationCode     String?
   emailVerificationExpires  DateTime?
   avatar                    String?
-  createdAt                 DateTime             @default(now())
-  updatedAt                 DateTime             @updatedAt
-  username                  String               @unique
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  username                  String                     @unique
   resetPasswordCode         String?
   resetPasswordExpires      DateTime?
   refreshToken              String?
   activityLogs              ActivityLog[]
   cart                      Cart?
   financeTransactions       FinanceTransaction[]
+  submittedPayments         ManualPaymentTransaction[] @relation("PaymentSubmittedBy")
+  verifiedPayments          ManualPaymentTransaction[] @relation("PaymentVerifiedBy")
   notifications             Notification[]
-  createdOrders             Order[]              @relation("OrderCreatedBy")
+  createdOrders             Order[]                    @relation("OrderCreatedBy")
   orders                    Order[]
   orderNotes                OrderNote[]
   orderTimelines            OrderTimeline[]
-  approvedProducts          Product[]            @relation("ProductApprovedBy")
+  approvedProducts          Product[]                  @relation("ProductApprovedBy")
   products                  Product[]
   reviews                   Review[]
+  staffContactChange        StaffContactChange?
   supportActivities         SupportActivity[]
   supportMessages           SupportMessage[]
-  supportTicketsAssigned    SupportTicket[]      @relation("SupportTicketAssignedTo")
-  supportTicketsEscalatedBy SupportTicket[]      @relation("SupportTicketEscalatedBy")
-  supportTicketsEscalatedTo SupportTicket[]      @relation("SupportTicketEscalatedTo")
-  supportTicketsCreated     SupportTicket[]      @relation("SupportTicketCreatedBy")
+  supportTicketsAssigned    SupportTicket[]            @relation("SupportTicketAssignedTo")
+  supportTicketsEscalatedBy SupportTicket[]            @relation("SupportTicketEscalatedBy")
+  supportTicketsEscalatedTo SupportTicket[]            @relation("SupportTicketEscalatedTo")
+  supportTicketsCreated     SupportTicket[]            @relation("SupportTicketCreatedBy")
   addresses                 UserAddress[]
   vendor                    Vendor?
   wishlists                 Wishlist[]
-  staffContactChange        StaffContactChange?
 }
 
 model StaffContactChange {
@@ -339,29 +341,55 @@ model CartItem {
 }
 
 model Order {
-  id            String          @id @default(uuid())
-  orderNumber   String          @unique
-  userId        String
-  totalAmount   Float
-  deliveryFee   Float           @default(0)
-  paymentMethod PaymentMethod   @default(COD)
-  paymentStatus PaymentStatus   @default(UNPAID)
-  orderStatus   OrderStatus     @default(PENDING)
-  customerName  String
-  phone         String
-  address       String
-  district      String?
-  upazila       String?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  createdById   String?
-  createdByRole Role?
-  source        String          @default("CUSTOMER")
-  createdBy     User?           @relation("OrderCreatedBy", fields: [createdById], references: [id])
-  user          User            @relation(fields: [userId], references: [id])
-  items         OrderItem[]
-  notes         OrderNote[]
-  timelines     OrderTimeline[]
+  id                  String                     @id @default(uuid())
+  orderNumber         String                     @unique
+  userId              String
+  totalAmount         Float
+  deliveryFee         Float                      @default(0)
+  paymentMethod       PaymentMethod              @default(COD)
+  paymentStatus       PaymentStatus              @default(UNPAID)
+  orderStatus         OrderStatus                @default(PENDING)
+  customerName        String
+  phone               String
+  address             String
+  district            String?
+  upazila             String?
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  createdById         String?
+  createdByRole       Role?
+  source              String                     @default("CUSTOMER")
+  metaPurchaseSentAt  DateTime?
+  paymentTransactions ManualPaymentTransaction[]
+  createdBy           User?                      @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  user                User                       @relation(fields: [userId], references: [id])
+  items               OrderItem[]
+  notes               OrderNote[]
+  timelines           OrderTimeline[]
+}
+
+model ManualPaymentTransaction {
+  id              String              @id @default(uuid())
+  orderId         String
+  submittedById   String
+  paymentMethod   PaymentMethod
+  transactionId   String              @unique
+  submittedAmount Float
+  senderNumber    String?
+  verifiedAmount  Float?
+  status          ManualPaymentStatus @default(PENDING_VERIFICATION)
+  verifiedAt      DateTime?
+  verifiedById    String?
+  rejectionReason String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  order           Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  submittedBy     User                @relation("PaymentSubmittedBy", fields: [submittedById], references: [id])
+  verifiedBy      User?               @relation("PaymentVerifiedBy", fields: [verifiedById], references: [id])
+
+  @@index([orderId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model OrderItem {
@@ -477,8 +505,7 @@ model ActivityLog {
   ipAddress   String?
   userAgent   String?
   createdAt   DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id])
+  user        User?    @relation(fields: [userId], references: [id])
 
   @@index([createdAt])
   @@index([userId])
@@ -586,6 +613,16 @@ model PlatformSetting {
   phone                  String?
   supportEmail           String?
   location               String?
+  bkashEnabled           Boolean        @default(false)
+  bkashNumber            String?
+  nagadEnabled           Boolean        @default(false)
+  nagadNumber            String?
+  rocketEnabled          Boolean        @default(false)
+  rocketNumber           String?
+  metaTrackingEnabled    Boolean        @default(false)
+  metaPixelId            String?
+  metaCapiAccessToken    String?
+  metaTestEventCode      String?
   createdAt              DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
 }
@@ -685,10 +722,20 @@ enum ReturnStatus {
 
 enum PaymentMethod {
   COD
+  BKASH
+  NAGAD
+  ROCKET
+}
+
+enum ManualPaymentStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
 }
 
 enum PaymentStatus {
   UNPAID
+  PENDING
   PARTIALLY_PAID
   PAID
 }

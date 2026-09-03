@@ -1,0 +1,13 @@
+import express from "express";
+import { protect, allowRoles } from "../middlewares/auth.middleware.js";
+import { getEnabledPaymentMethods, getPaymentSettings, updatePaymentSettings, getOrderPayments, getCustomerPayments, submitManualPayment, verifyManualPayment, rejectManualPayment } from "../controllers/payment.controller.js";
+const router = express.Router();
+router.get("/methods", protect, getEnabledPaymentMethods);
+router.get("/settings", protect, allowRoles("ADMIN", "SUPER_ADMIN"), getPaymentSettings);
+router.patch("/settings", protect, allowRoles("SUPER_ADMIN"), updatePaymentSettings);
+router.get("/admin/customer-payments", protect, allowRoles("SUPER_ADMIN"), getCustomerPayments);
+router.get("/orders/:orderId", protect, getOrderPayments);
+router.post("/orders/:orderId", protect, allowRoles("CUSTOMER"), submitManualPayment);
+router.patch("/transactions/:id/verify", protect, allowRoles("SUPER_ADMIN"), verifyManualPayment);
+router.patch("/transactions/:id/reject", protect, allowRoles("SUPER_ADMIN"), rejectManualPayment);
+export default router;

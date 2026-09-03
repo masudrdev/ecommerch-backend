@@ -1,4 +1,0 @@
-ALTER TABLE "Product"
-ADD COLUMN "isFeatured" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN "flashSaleStart" TIMESTAMP(3),
-ADD COLUMN "flashSaleEnd" TIMESTAMP(3);

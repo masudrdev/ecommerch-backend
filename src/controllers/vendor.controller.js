@@ -272,19 +272,32 @@ export const getVendorDashboard = async (req, res) => {
 
     const getItemRevenue = (item) => Number(item.price || 0) * Number(item.quantity || 0);
 
-    const totalRevenue = deliveredItems.reduce(
-      (sum, item) => sum + getItemRevenue(item),
+    const completedRevenueItems = orderItems.filter(
+      (item) => String(item.itemStatus || "").toUpperCase() === "COMPLETED"
+    );
+
+    const getVendorRevenue = (item) =>
+      Number(
+        item.vendorEarning ??
+          getItemRevenue(item) -
+            Number(item.platformEarning ?? item.commissionAmount ?? 0)
+      );
+
+    const getRevenueDate = (item) =>
+      new Date(item.completedAt || item.createdAt);
+
+    const totalRevenue = completedRevenueItems.reduce(
+      (sum, item) => sum + getVendorRevenue(item),
       0
     );
 
-    const thisMonthRevenue = deliveredItems
-      .filter((item) => new Date(item.createdAt) >= monthStart)
-      .reduce((sum, item) => sum + getItemRevenue(item), 0);
+    const thisMonthRevenue = completedRevenueItems
+      .filter((item) => getRevenueDate(item) >= monthStart)
+      .reduce((sum, item) => sum + getVendorRevenue(item), 0);
 
-    const todayRevenue = deliveredItems
-      .filter((item) => new Date(item.createdAt) >= todayStart)
-      .reduce((sum, item) => sum + getItemRevenue(item), 0);
-
+    const todayRevenue = completedRevenueItems
+      .filter((item) => getRevenueDate(item) >= todayStart)
+      .reduce((sum, item) => sum + getVendorRevenue(item), 0);
     const salesChart = [];
 
     for (let i = totalDays - 1; i >= 0; i--) {
